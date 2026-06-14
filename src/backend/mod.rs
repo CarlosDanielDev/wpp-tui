@@ -1,7 +1,8 @@
 use anyhow::Result;
 use async_trait::async_trait;
 
-/// One contact / chat in the list.
+/// One contact / chat in the list. Rendered in the P3 contacts phase.
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct Contact {
     pub jid: String,
@@ -32,9 +33,11 @@ pub enum BackendEvent {
 pub trait Backend: Send + Sync {
     /// Begin connecting / pairing.
     async fn connect(&self) -> Result<()>;
-    /// Fetch the contact / recent-chat list.
+    /// Fetch the contact / recent-chat list. Consumed in the P3 contacts phase.
+    #[allow(dead_code)]
     async fn contacts(&self) -> Result<Vec<Contact>>;
-    /// Send a text message to a chat.
+    /// Send a text message to a chat. Consumed in the P4 chat phase.
+    #[allow(dead_code)]
     async fn send(&self, chat: &str, body: &str) -> Result<()>;
     /// Await the next backend event (long-poll).
     async fn next_event(&self) -> Result<BackendEvent>;
