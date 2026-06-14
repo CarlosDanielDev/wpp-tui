@@ -1,79 +1,266 @@
-//! Placeholder DOS-style frame. Real screens (login / contacts / chat) land in
-//! later P1 issues; this renders the blocky 16-color shell they will fill in.
+//! Ratatui rendering of [`App`] state. Pure view layer: reads state, draws
+//! frames, never mutates. A DOS-style look — double box-drawing borders, a
+//! 16-color palette, and an F-key status bar along the bottom.
 
-use ratatui::layout::{Alignment, Constraint, Direction, Layout};
+use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, BorderType, Borders, List, ListItem, ListState, Paragraph, Wrap};
 use ratatui::Frame;
 
-use crate::app::App;
+use crate::app::{App, Screen};
 
-/// Classic DOS blue field.
-const BG: Color = Color::Blue;
+const DOS_BLUE: Color = Color::Blue;
+const DOS_CYAN: Color = Color::Cyan;
+const DOS_WHITE: Color = Color::White;
+const DOS_YELLOW: Color = Color::Yellow;
+const DOS_GREEN: Color = Color::Green;
 
-/// Render the full-screen placeholder: a double-bordered panel over a blue
-/// field with a centered banner and an F-key-style status bar.
+/// Draw the whole frame for the current screen.
 pub fn draw(frame: &mut Frame, app: &App) {
-    let area = frame.area();
-
-    // Paint the whole screen DOS blue first.
-    frame.render_widget(Block::default().style(Style::default().bg(BG)), area);
-
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(1), Constraint::Length(1)])
-        .split(area);
+        .split(frame.area());
 
-    let panel = Block::default()
+    match app.screen {
+        Screen::Login => draw_login(frame, app, chunks[0]),
+        Screen::Contacts => draw_contacts(frame, app, chunks[0]),
+        Screen::Chat => draw_chat(frame, app, chunks[0]),
+    }
+    draw_status_bar(frame, app, chunks[1]);
+}
+
+fn dos_block(title: &str) -> Block<'_> {
+    Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Double)
-        .border_style(Style::default().fg(Color::White).bg(BG))
+        .border_style(Style::default().fg(DOS_CYAN).bg(DOS_BLUE))
+        .style(Style::default().bg(DOS_BLUE).fg(DOS_WHITE))
         .title(Span::styled(
-            " wpp-tui ",
+            format!(" {title} "),
             Style::default()
-                .fg(Color::Yellow)
-                .bg(BG)
+                .fg(DOS_YELLOW)
+                .bg(DOS_BLUE)
                 .add_modifier(Modifier::BOLD),
         ))
-        .title_alignment(Alignment::Center)
-        .style(Style::default().bg(BG));
+}
 
-    let inner = panel.inner(chunks[0]);
-    frame.render_widget(panel, chunks[0]);
+fn draw_login(frame: &mut Frame, app: &App, area: Rect) {
+    let block = dos_block("wpp-tui — Pair device");
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
 
-    let body = Text::from(vec![
-        Line::from(""),
-        Line::from(Span::styled(
-            "DOS-style WhatsApp TUI",
-            Style::default()
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD),
-        )),
-        Line::from(""),
-        Line::from(Span::styled(
-            format!("status: {}", app.status()),
-            Style::default().fg(Color::Cyan),
-        )),
-        Line::from(""),
-        Line::from(Span::styled(
-            "Press q or Ctrl+C to quit",
-            Style::default().fg(Color::Gray),
-        )),
-    ]);
-    frame.render_widget(
-        Paragraph::new(body)
-            .alignment(Alignment::Center)
-            .style(Style::default().bg(BG)),
-        inner,
+    let mut lines = vec![Line::from(""), Line::from("")];
+    match &app.qr {
+        Some(code) => {
+            lines.push(Line::from(Span::styled(
+                "Scan this code in WhatsApp → Linked devices:",
+                Style::default().fg(DOS_WHITE),
+            )));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                code.clone(),
+                Style::default().fg(DOS_GREEN).add_modifier(Modifier::BOLD),
+            )));
+        }
+        None => lines.push(Line::from(Span::styled(
+            "Waiting for QR code…",
+            Style::default().fg(DOS_WHITE),
+        ))),
+    }
+    if app.connected {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "Connected!",
+            Style::default().fg(DOS_GREEN).add_modifier(Modifier::BOLD),
+        )));
+    }
+
+    let para = Paragraph::new(lines)
+        .alignment(Alignment::Center)
+        .style(Style::default().bg(DOS_BLUE));
+    frame.render_widget(para, inner);
+}
+
+fn draw_contacts(frame: &mut Frame, app: &App, area: Rect) {
+    let block = dos_block("Contacts");
+    let items: Vec<ListItem> = app
+        .contacts
+        .iter()
+        .map(|c| {
+            let unread = app.unread.get(&c.jid).copied().unwrap_or(0);
+            let label = if unread > 0 {
+                format!("{} ({unread})", c.name)
+            } else {
+                c.name.clone()
+            };
+            let style = if unread > 0 {
+                Style::default().fg(DOS_YELLOW).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(DOS_WHITE)
+            };
+            ListItem::new(Line::from(Span::styled(label, style)))
+        })
+        .collect();
+
+    let list = List::new(items).block(block).highlight_style(
+        Style::default()
+            .bg(DOS_CYAN)
+            .fg(DOS_BLUE)
+            .add_modifier(Modifier::BOLD),
     );
 
-    let status_bar = Paragraph::new(Line::from(vec![
-        Span::styled(" F1 ", Style::default().fg(Color::Black).bg(Color::Cyan)),
-        Span::styled(" Help ", Style::default().fg(Color::White).bg(BG)),
-        Span::styled(" q ", Style::default().fg(Color::Black).bg(Color::Cyan)),
-        Span::styled(" Quit ", Style::default().fg(Color::White).bg(BG)),
+    let mut state = ListState::default();
+    if !app.contacts.is_empty() {
+        state.select(Some(app.selected));
+    }
+    frame.render_stateful_widget(list, area, &mut state);
+}
+
+fn draw_chat(frame: &mut Frame, app: &App, area: Rect) {
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(1), Constraint::Length(3)])
+        .split(area);
+
+    let title = app
+        .open_chat_name()
+        .map(|n| format!("Chat — {n}"))
+        .unwrap_or_else(|| "Chat".to_string());
+    let history_block = dos_block(&title);
+
+    let lines: Vec<Line> = app
+        .open_messages()
+        .iter()
+        .map(|m| {
+            if m.from_me {
+                Line::from(vec![
+                    Span::styled("→ ", Style::default().fg(DOS_GREEN)),
+                    Span::styled(m.body.clone(), Style::default().fg(DOS_WHITE)),
+                ])
+            } else {
+                Line::from(vec![
+                    Span::styled("← ", Style::default().fg(DOS_CYAN)),
+                    Span::styled(m.body.clone(), Style::default().fg(DOS_WHITE)),
+                ])
+            }
+        })
+        .collect();
+    let history = Paragraph::new(lines)
+        .block(history_block)
+        .wrap(Wrap { trim: false })
+        .style(Style::default().bg(DOS_BLUE));
+    frame.render_widget(history, rows[0]);
+
+    let input_block = dos_block("Message");
+    let input = Paragraph::new(Line::from(vec![
+        Span::styled(&app.input, Style::default().fg(DOS_YELLOW)),
+        Span::styled("_", Style::default().fg(DOS_YELLOW)),
     ]))
-    .style(Style::default().bg(BG));
-    frame.render_widget(status_bar, chunks[1]);
+    .block(input_block)
+    .style(Style::default().bg(DOS_BLUE));
+    frame.render_widget(input, rows[1]);
+}
+
+fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect) {
+    let keys = match app.screen {
+        Screen::Login => "F:Quit[q]",
+        Screen::Contacts => "↑↓:Move  Enter:Open  Quit[q]",
+        Screen::Chat => "Type:Compose  Enter:Send  Esc:Back",
+    };
+    let bar = Line::from(vec![
+        Span::styled(
+            format!(" {} ", app.status),
+            Style::default()
+                .bg(DOS_CYAN)
+                .fg(DOS_BLUE)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!("  {keys}"),
+            Style::default().bg(DOS_BLUE).fg(DOS_WHITE),
+        ),
+    ]);
+    let para = Paragraph::new(bar).style(Style::default().bg(DOS_BLUE));
+    frame.render_widget(para, area);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::backend::{BackendEvent, Contact, Message};
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    fn render(app: &App) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        terminal.draw(|f| draw(f, app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        buffer
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>()
+    }
+
+    #[test]
+    fn login_screen_shows_qr() {
+        let mut app = App::default();
+        app.apply_event(BackendEvent::Qr("MOCK-QR-SCAN-ME".into()));
+        let out = render(&app);
+        assert!(out.contains("MOCK-QR-SCAN-ME"));
+        assert!(out.contains("Pair device"));
+    }
+
+    #[test]
+    fn contacts_screen_lists_names_and_unread() {
+        let mut app = App::default();
+        app.apply_event(BackendEvent::Connected);
+        app.set_contacts(vec![
+            Contact {
+                jid: "a@s".into(),
+                name: "Alice".into(),
+            },
+            Contact {
+                jid: "b@s".into(),
+                name: "Bob".into(),
+            },
+        ]);
+        app.apply_event(BackendEvent::Message {
+            chat: "a@s".into(),
+            msg: Message {
+                from_me: false,
+                body: "hi".into(),
+            },
+        });
+        let out = render(&app);
+        assert!(out.contains("Alice"));
+        assert!(out.contains("Bob"));
+        // Unread badge.
+        assert!(out.contains("(1)"));
+    }
+
+    #[test]
+    fn chat_screen_shows_messages() {
+        let mut app = App::default();
+        app.apply_event(BackendEvent::Connected);
+        app.set_contacts(vec![Contact {
+            jid: "a@s".into(),
+            name: "Alice".into(),
+        }]);
+        app.apply_event(BackendEvent::Message {
+            chat: "a@s".into(),
+            msg: Message {
+                from_me: false,
+                body: "hello there".into(),
+            },
+        });
+        // Open Alice's chat.
+        use crossterm::event::{KeyCode, KeyEvent};
+        app.on_key(KeyEvent::from(KeyCode::Enter));
+        let out = render(&app);
+        assert!(out.contains("hello there"));
+        assert!(out.contains("Alice"));
+    }
 }
