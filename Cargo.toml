@@ -1,0 +1,20 @@
+[package]
+name = "wpp-tui"
+version = "0.1.0"
+edition = "2021"
+description = "DOS-style terminal WhatsApp client (public experiment)"
+license = "MIT"
+repository = "https://github.com/CarlosDanielDev/wpp-tui"
+
+[features]
+default = []
+# Enables the real whatsmeow (Go) FFI backend. Requires a Go toolchain at build
+# time. Wired up in the QR-login phase (P2).
+whatsmeow = []
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+ratatui = "0.29"
+crossterm = "0.28"
+anyhow = "1"
+async-trait = "0.1"
