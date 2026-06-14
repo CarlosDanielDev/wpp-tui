@@ -2,6 +2,7 @@ mod app;
 mod backend;
 mod tui;
 mod ui;
+mod widgets;
 
 use std::sync::Arc;
 use std::time::Duration;
