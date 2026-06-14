@@ -1,6 +1,7 @@
 //! Ratatui rendering of [`App`] state. Pure view layer: reads state, draws
-//! frames, never mutates. A DOS-style look — double box-drawing borders, a
-//! 16-color palette, and an F-key status bar along the bottom.
+//! frames, never mutates. A retro-CRT DOS look — double box-drawing borders,
+//! phosphor-green/amber on black (mirrors maestro's `retro()` theme), and an
+//! F-key status bar along the bottom.
 
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -10,11 +11,14 @@ use ratatui::Frame;
 
 use crate::app::{App, Screen};
 
-const DOS_BLUE: Color = Color::Blue;
-const DOS_CYAN: Color = Color::Cyan;
-const DOS_WHITE: Color = Color::White;
-const DOS_YELLOW: Color = Color::Yellow;
-const DOS_GREEN: Color = Color::Green;
+// Retro CRT palette — DOS-era phosphor green / amber on black. Mirrors
+// maestro's `retro()` theme.
+const BG: Color = Color::Black; // terminal background
+const GREEN: Color = Color::Rgb(0, 255, 65); // phosphor green, primary text
+const GREEN_DIM: Color = Color::Rgb(0, 180, 45); // secondary text
+const AMBER: Color = Color::Rgb(255, 175, 0); // titles, focus, f-keys
+const AMBER_DK: Color = Color::Rgb(255, 140, 0); // active border, selection
+const PANEL_BG: Color = Color::Rgb(0, 40, 10); // subtle green-black fill
 
 /// Draw the whole frame for the current screen.
 pub fn draw(frame: &mut Frame, app: &App) {
@@ -35,13 +39,13 @@ fn dos_block(title: &str) -> Block<'_> {
     Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Double)
-        .border_style(Style::default().fg(DOS_CYAN).bg(DOS_BLUE))
-        .style(Style::default().bg(DOS_BLUE).fg(DOS_WHITE))
+        .border_style(Style::default().fg(AMBER_DK).bg(BG))
+        .style(Style::default().bg(BG).fg(GREEN))
         .title(Span::styled(
             format!(" {title} "),
             Style::default()
-                .fg(DOS_YELLOW)
-                .bg(DOS_BLUE)
+                .fg(AMBER)
+                .bg(BG)
                 .add_modifier(Modifier::BOLD),
         ))
 }
@@ -56,30 +60,30 @@ fn draw_login(frame: &mut Frame, app: &App, area: Rect) {
         Some(code) => {
             lines.push(Line::from(Span::styled(
                 "Scan this code in WhatsApp → Linked devices:",
-                Style::default().fg(DOS_WHITE),
+                Style::default().fg(GREEN_DIM),
             )));
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
                 code.clone(),
-                Style::default().fg(DOS_GREEN).add_modifier(Modifier::BOLD),
+                Style::default().fg(GREEN).add_modifier(Modifier::BOLD),
             )));
         }
         None => lines.push(Line::from(Span::styled(
             "Waiting for QR code…",
-            Style::default().fg(DOS_WHITE),
+            Style::default().fg(GREEN_DIM),
         ))),
     }
     if app.connected {
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
             "Connected!",
-            Style::default().fg(DOS_GREEN).add_modifier(Modifier::BOLD),
+            Style::default().fg(GREEN).add_modifier(Modifier::BOLD),
         )));
     }
 
     let para = Paragraph::new(lines)
         .alignment(Alignment::Center)
-        .style(Style::default().bg(DOS_BLUE));
+        .style(Style::default().bg(BG));
     frame.render_widget(para, inner);
 }
 
@@ -96,9 +100,9 @@ fn draw_contacts(frame: &mut Frame, app: &App, area: Rect) {
                 c.name.clone()
             };
             let style = if unread > 0 {
-                Style::default().fg(DOS_YELLOW).add_modifier(Modifier::BOLD)
+                Style::default().fg(AMBER).add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(DOS_WHITE)
+                Style::default().fg(GREEN)
             };
             ListItem::new(Line::from(Span::styled(label, style)))
         })
@@ -106,8 +110,8 @@ fn draw_contacts(frame: &mut Frame, app: &App, area: Rect) {
 
     let list = List::new(items).block(block).highlight_style(
         Style::default()
-            .bg(DOS_CYAN)
-            .fg(DOS_BLUE)
+            .bg(AMBER_DK)
+            .fg(BG)
             .add_modifier(Modifier::BOLD),
     );
 
@@ -136,13 +140,13 @@ fn draw_chat(frame: &mut Frame, app: &App, area: Rect) {
         .map(|m| {
             if m.from_me {
                 Line::from(vec![
-                    Span::styled("→ ", Style::default().fg(DOS_GREEN)),
-                    Span::styled(m.body.clone(), Style::default().fg(DOS_WHITE)),
+                    Span::styled("→ ", Style::default().fg(AMBER)),
+                    Span::styled(m.body.clone(), Style::default().fg(GREEN)),
                 ])
             } else {
                 Line::from(vec![
-                    Span::styled("← ", Style::default().fg(DOS_CYAN)),
-                    Span::styled(m.body.clone(), Style::default().fg(DOS_WHITE)),
+                    Span::styled("← ", Style::default().fg(GREEN_DIM)),
+                    Span::styled(m.body.clone(), Style::default().fg(GREEN)),
                 ])
             }
         })
@@ -150,16 +154,21 @@ fn draw_chat(frame: &mut Frame, app: &App, area: Rect) {
     let history = Paragraph::new(lines)
         .block(history_block)
         .wrap(Wrap { trim: false })
-        .style(Style::default().bg(DOS_BLUE));
+        .style(Style::default().bg(BG));
     frame.render_widget(history, rows[0]);
 
     let input_block = dos_block("Message");
     let input = Paragraph::new(Line::from(vec![
-        Span::styled(&app.input, Style::default().fg(DOS_YELLOW)),
-        Span::styled("_", Style::default().fg(DOS_YELLOW)),
+        Span::styled(&app.input, Style::default().fg(AMBER)),
+        Span::styled(
+            "_",
+            Style::default()
+                .fg(AMBER)
+                .add_modifier(Modifier::SLOW_BLINK),
+        ),
     ]))
     .block(input_block)
-    .style(Style::default().bg(DOS_BLUE));
+    .style(Style::default().bg(BG));
     frame.render_widget(input, rows[1]);
 }
 
@@ -173,16 +182,13 @@ fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect) {
         Span::styled(
             format!(" {} ", app.status),
             Style::default()
-                .bg(DOS_CYAN)
-                .fg(DOS_BLUE)
+                .bg(AMBER)
+                .fg(BG)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(
-            format!("  {keys}"),
-            Style::default().bg(DOS_BLUE).fg(DOS_WHITE),
-        ),
+        Span::styled(format!("  {keys}"), Style::default().bg(PANEL_BG).fg(GREEN)),
     ]);
-    let para = Paragraph::new(bar).style(Style::default().bg(DOS_BLUE));
+    let para = Paragraph::new(bar).style(Style::default().bg(BG));
     frame.render_widget(para, area);
 }
 
