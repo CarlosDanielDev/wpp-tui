@@ -123,14 +123,22 @@ func wpp_bridge_start() C.int {
 				return
 			}
 
-			var paired bool
+			// The QR channel only emits codes once the websocket is up, so we
+			// must Connect() before ranging — otherwise no code ever arrives
+			// and the client sits forever on "waiting for QR code".
+			if err := c.Connect(); err != nil {
+				setError(fmt.Errorf("Connect: %w", err))
+				cancel()
+				return
+			}
+
 			for item := range qrChan {
 				switch item.Event {
 				case "code":
 					code := item.Code
 					qrCode.Store(&code)
 				case "success":
-					paired = true
+					// Pairing done; the existing connection stays up.
 				case "error":
 					setError(fmt.Errorf("pairing error: %w", item.Error))
 					cancel()
@@ -151,12 +159,6 @@ func wpp_bridge_start() C.int {
 					setError(fmt.Errorf("pairing failed: scanned without multi-device"))
 					cancel()
 					return
-				}
-			}
-
-			if paired {
-				if err := c.Connect(); err != nil {
-					setError(fmt.Errorf("Connect after pairing: %w", err))
 				}
 			}
 		}()

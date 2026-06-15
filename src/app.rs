@@ -58,6 +58,8 @@ pub struct App {
     pub status: String,
     /// Set when the user asks to quit.
     pub should_quit: bool,
+    /// Monotonic animation counter, bumped on each render tick. Drives spinners.
+    pub tick: u64,
 }
 
 impl Default for App {
@@ -74,11 +76,17 @@ impl Default for App {
             unread: HashMap::new(),
             status: "Waiting for QR code…".to_string(),
             should_quit: false,
+            tick: 0,
         }
     }
 }
 
 impl App {
+    /// Advance the animation counter one render tick.
+    pub fn tick(&mut self) {
+        self.tick = self.tick.wrapping_add(1);
+    }
+
     /// Seed the contact list (fetched once after connecting).
     pub fn set_contacts(&mut self, contacts: Vec<Contact>) {
         self.contacts = contacts;

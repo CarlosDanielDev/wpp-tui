@@ -14,7 +14,7 @@ use crate::qr;
 
 // Retro CRT palette — DOS-era phosphor green / amber on black. Mirrors
 // maestro's `retro()` theme.
-const BG: Color = Color::Black; // terminal background
+const BG: Color = Color::Rgb(0, 0, 0); // true black (not palette black, which themes tint)
 const GREEN: Color = Color::Rgb(0, 255, 65); // phosphor green, primary text
 const GREEN_DIM: Color = Color::Rgb(0, 180, 45); // secondary text
 const AMBER: Color = Color::Rgb(255, 175, 0); // titles, focus, f-keys
@@ -23,6 +23,13 @@ const PANEL_BG: Color = Color::Rgb(0, 40, 10); // subtle green-black fill
 
 /// Draw the whole frame for the current screen.
 pub fn draw(frame: &mut Frame, app: &App) {
+    // Paint the entire terminal solid black first so no themed default
+    // background ("fog") shows through any unfilled cell.
+    frame.render_widget(
+        Block::default().style(Style::default().bg(BG)),
+        frame.area(),
+    );
+
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(1), Constraint::Length(1)])
@@ -74,10 +81,14 @@ fn draw_login(frame: &mut Frame, app: &App, area: Rect) {
             )));
         }
         None => {
-            lines.push(Line::from(Span::styled(
-                "Waiting for QR code…",
-                Style::default().fg(GREEN_DIM),
-            )));
+            // Animated braille spinner while the bridge negotiates the code.
+            const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+            let spin = SPINNER[(app.tick as usize) % SPINNER.len()];
+            lines.push(Line::from(vec![
+                Span::styled(format!("{spin}  "), Style::default().fg(AMBER)),
+                Span::styled("Waiting for QR code…", Style::default().fg(GREEN_DIM)),
+                Span::styled(format!("  {spin}"), Style::default().fg(AMBER)),
+            ]));
         }
     }
     if app.connected {

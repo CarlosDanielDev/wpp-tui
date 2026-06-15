@@ -23,6 +23,8 @@ use tui::Term;
 enum Tick {
     Backend(BackendEvent),
     Key(crossterm::event::KeyEvent),
+    /// Periodic timer that drives animations (e.g. the QR spinner).
+    Anim,
 }
 
 /// P1 entrypoint: set up the terminal, run the TUI event loop against the mock
@@ -100,6 +102,18 @@ async fn run(terminal: &mut Term, app: &mut App, backend: Arc<dyn Backend>) -> R
             Err(_) => break,
         }
     });
+
+    // Producer: animation heartbeat so spinners advance without user input.
+    let anim_tx = tx.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_millis(120));
+        loop {
+            interval.tick().await;
+            if anim_tx.send(Tick::Anim).await.is_err() {
+                break;
+            }
+        }
+    });
     drop(tx);
 
     // Initial paint before the first event arrives.
@@ -130,6 +144,7 @@ async fn run(terminal: &mut Term, app: &mut App, backend: Arc<dyn Backend>) -> R
                     backend.send(&chat, &body).await?;
                 }
             },
+            Tick::Anim => app.tick(),
         }
 
         terminal.draw(|f| ui::draw(f, app))?;
