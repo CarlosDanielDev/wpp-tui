@@ -52,12 +52,14 @@ async fn main() -> Result<()> {
     result
 }
 
-/// Pick the transport. The mock backend is the default everywhere; with the
-/// `whatsmeow` feature built, `--whatsmeow` selects the real FFI backend.
+/// Pick the transport. When built with the `whatsmeow` feature the real FFI
+/// backend is the default (this is the only way to get a scannable WhatsApp QR);
+/// pass `--mock` to force the simulated backend. Without the feature it is
+/// always the mock.
 fn make_backend() -> Arc<dyn Backend> {
     #[cfg(feature = "whatsmeow")]
     {
-        if std::env::args().any(|a| a == "--whatsmeow") {
+        if !std::env::args().any(|a| a == "--mock") {
             return Arc::new(backend::WhatsmeowBackend::default());
         }
     }

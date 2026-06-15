@@ -60,13 +60,12 @@ fn draw_login(frame: &mut Frame, app: &App, area: Rect) {
     match &app.qr {
         Some(code) => {
             lines.push(Line::from(Span::styled(
-                "Scan this code in WhatsApp → Linked devices:",
+                "WhatsApp → Settings → Linked Devices → Link a device → scan:",
                 Style::default().fg(GREEN_DIM),
             )));
             lines.push(Line::from(""));
 
-            let qr_lines = qr::render_qr(code, GREEN, BG);
-            lines.extend(qr_lines);
+            lines.extend(qr::render_qr(code));
 
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
@@ -225,7 +224,8 @@ mod tests {
     use ratatui::Terminal;
 
     fn render(app: &App) -> String {
-        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        // Tall enough to hold a quiet-zoned QR plus the surrounding hint lines.
+        let mut terminal = Terminal::new(TestBackend::new(80, 60)).unwrap();
         terminal.draw(|f| draw(f, app)).unwrap();
         let buffer = terminal.backend().buffer().clone();
         buffer
@@ -241,7 +241,7 @@ mod tests {
         app.apply_event(BackendEvent::Qr("MOCK-QR-SCAN-ME".into()));
         let out = render(&app);
         assert!(out.contains("Pair device"));
-        assert!(out.contains("Scan this code"));
+        assert!(out.contains("Linked Devices"));
         assert!(out.contains("Code expires"));
         assert!(!out.contains("MOCK-QR-SCAN-ME"));
         assert!(out.contains('\u{2580}') || out.contains('\u{2584}') || out.contains('\u{2588}'));
