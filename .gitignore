@@ -3,3 +3,15 @@
 *.a
 bridge/libwppbridge.h
 .DS_Store
+
+# whatsmeow session store (created at runtime by the real backend)
+/wpp-data/
+
+# maestro runtime artifacts — local state, never committed
+/.maestro/worktrees/
+/.maestro/logs/
+/.maestro/adapt-cache.json
+/maestro-state.json
+/maestro-state.json.lock
+/maestro.log
+/maestro-prompt-history.json
