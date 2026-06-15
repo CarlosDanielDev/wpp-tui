@@ -2,6 +2,7 @@ mod app;
 mod backend;
 #[cfg(feature = "whatsmeow")]
 mod bridge;
+mod qr;
 mod tui;
 mod ui;
 mod widgets;

@@ -10,6 +10,7 @@ use ratatui::widgets::{Block, BorderType, Borders, List, ListItem, ListState, Pa
 use ratatui::Frame;
 
 use crate::app::{App, Screen};
+use crate::qr;
 
 // Retro CRT palette — DOS-era phosphor green / amber on black. Mirrors
 // maestro's `retro()` theme.
@@ -55,7 +56,7 @@ fn draw_login(frame: &mut Frame, app: &App, area: Rect) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let mut lines = vec![Line::from(""), Line::from("")];
+    let mut lines = vec![Line::from("")];
     match &app.qr {
         Some(code) => {
             lines.push(Line::from(Span::styled(
@@ -63,15 +64,22 @@ fn draw_login(frame: &mut Frame, app: &App, area: Rect) {
                 Style::default().fg(GREEN_DIM),
             )));
             lines.push(Line::from(""));
+
+            let qr_lines = qr::render_qr(code, GREEN, BG);
+            lines.extend(qr_lines);
+
+            lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
-                code.clone(),
-                Style::default().fg(GREEN).add_modifier(Modifier::BOLD),
+                "Code expires in ~30s — a new one will appear automatically",
+                Style::default().fg(GREEN_DIM),
             )));
         }
-        None => lines.push(Line::from(Span::styled(
-            "Waiting for QR code…",
-            Style::default().fg(GREEN_DIM),
-        ))),
+        None => {
+            lines.push(Line::from(Span::styled(
+                "Waiting for QR code…",
+                Style::default().fg(GREEN_DIM),
+            )));
+        }
     }
     if app.connected {
         lines.push(Line::from(""));
@@ -215,8 +223,11 @@ mod tests {
         let mut app = App::default();
         app.apply_event(BackendEvent::Qr("MOCK-QR-SCAN-ME".into()));
         let out = render(&app);
-        assert!(out.contains("MOCK-QR-SCAN-ME"));
         assert!(out.contains("Pair device"));
+        assert!(out.contains("Scan this code"));
+        assert!(out.contains("Code expires"));
+        assert!(!out.contains("MOCK-QR-SCAN-ME"));
+        assert!(out.contains('\u{2580}') || out.contains('\u{2584}') || out.contains('\u{2588}'));
     }
 
     #[test]
