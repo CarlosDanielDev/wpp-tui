@@ -3,7 +3,7 @@ use async_trait::async_trait;
 
 /// One contact / chat in the list. Rendered in the P3 contacts phase.
 #[allow(dead_code)]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Contact {
     pub jid: String,
     pub name: String,

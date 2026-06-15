@@ -22,6 +22,7 @@ extern "C" {
     fn wpp_bridge_last_error() -> *mut c_char;
     fn wpp_bridge_disconnect();
     fn wpp_bridge_free_string(s: *mut c_char);
+    fn wpp_bridge_fetch_contacts() -> *mut c_char;
 }
 
 /// Copy a Go-owned C string into an owned `String` and free the Go allocation.
@@ -106,6 +107,14 @@ pub fn disconnect() {
     unsafe { wpp_bridge_disconnect() }
 }
 
+/// Fetch the contact/chat list from the Go-side whatsmeow store.
+/// Returns `None` if the bridge is not initialised or an error occurred;
+/// `Some("")` means the store returned an empty contact list.
+pub fn fetch_contacts() -> Option<String> {
+    // SAFETY: the returned pointer is null or a Go-allocated C string we own.
+    unsafe { take_string(wpp_bridge_fetch_contacts()) }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -114,5 +123,11 @@ mod tests {
     fn version_matches_go_bridge() {
         // Mirrors the literal returned by `bridge/bridge.go`.
         assert_eq!(version(), "0.2.0");
+    }
+
+    #[test]
+    fn fetch_contacts_returns_none_when_not_initialised() {
+        // The Go-side client is nil in test — bridge returns null → `None`.
+        assert!(fetch_contacts().is_none());
     }
 }
