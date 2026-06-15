@@ -309,8 +309,10 @@ mod tests {
 
     #[test]
     fn contacts_screen_before_connect_shows_connecting() {
-        let mut app = App::default();
-        app.screen = Screen::Contacts;
+        let app = App {
+            screen: Screen::Contacts,
+            ..Default::default()
+        };
         let out = render(&app);
         assert!(out.contains("Contacts"));
         assert!(out.contains("Connecting"));
