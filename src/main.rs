@@ -43,8 +43,10 @@ async fn main() -> Result<()> {
     let backend = make_backend();
     backend.connect().await?;
 
+    // Contacts are fetched lazily once the backend reports `Connected` (see the
+    // event loop) — the real bridge has no contacts until the device is paired,
+    // so fetching here would fail before the QR is ever shown.
     let mut app = App::default();
-    app.set_contacts(backend.contacts().await?);
 
     let mut terminal = tui::init()?;
     let result = run(&mut terminal, &mut app, backend).await;
@@ -105,7 +107,20 @@ async fn run(terminal: &mut Term, app: &mut App, backend: Arc<dyn Backend>) -> R
 
     while let Some(tick) = rx.recv().await {
         match tick {
-            Tick::Backend(ev) => app.apply_event(ev),
+            Tick::Backend(ev) => {
+                let was_connected = app.connected;
+                app.apply_event(ev);
+                // On the first successful pairing, pull the contact list. The
+                // bridge has no contacts until connected, so this can't run any
+                // earlier. Failure is non-fatal — the contacts screen just stays
+                // empty rather than crashing the app.
+                if app.connected && !was_connected {
+                    match backend.contacts().await {
+                        Ok(contacts) => app.set_contacts(contacts),
+                        Err(e) => app.status = format!("Contacts unavailable: {e}"),
+                    }
+                }
+            }
             Tick::Key(key) => match app.on_key(key) {
                 Action::None => {}
                 Action::Quit => {
