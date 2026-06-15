@@ -70,6 +70,15 @@ fn make_backend() -> Arc<dyn Backend> {
     Arc::new(MockBackend::default())
 }
 
+/// Re-fetch contacts from the backend into the app. Non-fatal: on failure the
+/// list stays as-is and the error surfaces on the status line.
+async fn refresh_contacts(backend: &Arc<dyn Backend>, app: &mut App) {
+    match backend.contacts().await {
+        Ok(contacts) => app.set_contacts(contacts),
+        Err(e) => app.status = format!("Contacts unavailable: {e}"),
+    }
+}
+
 async fn run(terminal: &mut Term, app: &mut App, backend: Arc<dyn Backend>) -> Result<()> {
     let (tx, mut rx) = mpsc::channel::<Tick>(64);
 
@@ -126,13 +135,9 @@ async fn run(terminal: &mut Term, app: &mut App, backend: Arc<dyn Backend>) -> R
                 app.apply_event(ev);
                 // On the first successful pairing, pull the contact list. The
                 // bridge has no contacts until connected, so this can't run any
-                // earlier. Failure is non-fatal — the contacts screen just stays
-                // empty rather than crashing the app.
+                // earlier.
                 if app.connected && !was_connected {
-                    match backend.contacts().await {
-                        Ok(contacts) => app.set_contacts(contacts),
-                        Err(e) => app.status = format!("Contacts unavailable: {e}"),
-                    }
+                    refresh_contacts(&backend, app).await;
                 }
             }
             Tick::Key(key) => match app.on_key(key) {
@@ -143,8 +148,16 @@ async fn run(terminal: &mut Term, app: &mut App, backend: Arc<dyn Backend>) -> R
                 Action::Send { chat, body } => {
                     backend.send(&chat, &body).await?;
                 }
+                Action::Refresh => refresh_contacts(&backend, app).await,
             },
-            Tick::Anim => app.tick(),
+            Tick::Anim => {
+                app.tick();
+                // Contacts sync lands a few seconds after pairing, so keep
+                // re-fetching (~every 3s) while connected but still empty.
+                if app.connected && app.contacts.is_empty() && app.tick.is_multiple_of(25) {
+                    refresh_contacts(&backend, app).await;
+                }
+            }
         }
 
         terminal.draw(|f| ui::draw(f, app))?;

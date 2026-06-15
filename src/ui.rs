@@ -112,7 +112,7 @@ fn draw_contacts(frame: &mut Frame, app: &App, area: Rect) {
         let inner = block.inner(area);
         frame.render_widget(block, area);
         let text = if app.connected {
-            "No contacts yet — pull to refresh"
+            "No contacts yet — syncing… press r to refresh"
         } else {
             "Connecting…"
         };
@@ -210,7 +210,7 @@ fn draw_chat(frame: &mut Frame, app: &App, area: Rect) {
 fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect) {
     let keys = match app.screen {
         Screen::Login => "F:Quit[q]",
-        Screen::Contacts => "↑↓/jk:Move  Enter:Open  Quit[q]",
+        Screen::Contacts => "↑↓/jk:Move  Enter:Open  r:Refresh  Quit[q]",
         Screen::Chat => "Type:Compose  Enter:Send  Esc:Back",
     };
     let bar = Line::from(vec![

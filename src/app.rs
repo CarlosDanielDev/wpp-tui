@@ -33,6 +33,8 @@ pub enum Action {
     Quit,
     /// Send `body` to the chat identified by `chat`.
     Send { chat: String, body: String },
+    /// Re-fetch the contact list from the backend.
+    Refresh,
 }
 
 /// The whole app state. Held by the event loop, mutated only through the
@@ -138,6 +140,7 @@ impl App {
     fn on_key_contacts(&mut self, key: KeyEvent) -> Action {
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc => Action::Quit,
+            KeyCode::Char('r') | KeyCode::F(5) => Action::Refresh,
             KeyCode::Up | KeyCode::Char('k') => {
                 if self.selected > 0 {
                     self.selected -= 1;
