@@ -45,3 +45,8 @@ pub trait Backend: Send + Sync {
 
 pub mod mock;
 pub use mock::MockBackend;
+
+#[cfg(feature = "whatsmeow")]
+pub mod whatsmeow;
+#[cfg(feature = "whatsmeow")]
+pub use whatsmeow::WhatsmeowBackend;

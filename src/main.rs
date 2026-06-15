@@ -39,7 +39,7 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
-    let backend = Arc::new(MockBackend::default());
+    let backend = make_backend();
     backend.connect().await?;
 
     let mut app = App::default();
@@ -51,7 +51,19 @@ async fn main() -> Result<()> {
     result
 }
 
-async fn run(terminal: &mut Term, app: &mut App, backend: Arc<MockBackend>) -> Result<()> {
+/// Pick the transport. The mock backend is the default everywhere; with the
+/// `whatsmeow` feature built, `--whatsmeow` selects the real FFI backend.
+fn make_backend() -> Arc<dyn Backend> {
+    #[cfg(feature = "whatsmeow")]
+    {
+        if std::env::args().any(|a| a == "--whatsmeow") {
+            return Arc::new(backend::WhatsmeowBackend::default());
+        }
+    }
+    Arc::new(MockBackend::default())
+}
+
+async fn run(terminal: &mut Term, app: &mut App, backend: Arc<dyn Backend>) -> Result<()> {
     let (tx, mut rx) = mpsc::channel::<Tick>(64);
 
     // Producer: drain backend events forever.
