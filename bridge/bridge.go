@@ -14,6 +14,7 @@ import "C"
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"unsafe"
@@ -209,6 +210,43 @@ func wpp_bridge_disconnect() {
 //export wpp_bridge_free_string
 func wpp_bridge_free_string(s *C.char) {
 	C.free(unsafe.Pointer(s))
+}
+
+//export wpp_bridge_fetch_contacts
+func wpp_bridge_fetch_contacts() *C.char {
+	mu.Lock()
+	c := client
+	mu.Unlock()
+
+	if c == nil || c.Store.Contacts == nil {
+		return nil
+	}
+
+	contacts, err := c.Store.Contacts.GetAllContacts(context.Background())
+	if err != nil {
+		setError(fmt.Errorf("GetAllContacts: %w", err))
+		return nil
+	}
+
+	var lines []string
+	for jid, info := range contacts {
+		name := info.FullName
+		if name == "" {
+			name = info.PushName
+		}
+		if name == "" {
+			name = info.BusinessName
+		}
+		if name == "" {
+			name = info.FirstName
+		}
+		if name == "" {
+			name = jid.User
+		}
+		lines = append(lines, jid.String()+"\t"+name)
+	}
+
+	return C.CString(strings.Join(lines, "\n"))
 }
 
 func main() {}

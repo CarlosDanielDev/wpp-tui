@@ -2,9 +2,9 @@
 //!
 //! Only compiled under the `whatsmeow` feature. `connect` opens the client and
 //! starts pairing; `next_event` polls the Go side and translates its state into
-//! [`BackendEvent`]s. Contacts and outbound/inbound messages are still stubs —
-//! those land with the contacts (#9) and chat-core (#11) phases, when the Go
-//! surface grows the matching exports.
+//! [`BackendEvent`]s; `contacts` fetches the contact / recent-chat list from the
+//! Go-side SQLite store. Outbound/inbound messages are still stubs — those land
+//! with the chat-core phase (#11).
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -49,6 +49,20 @@ impl Drop for WhatsmeowBackend {
     }
 }
 
+/// Parse the tab-separated contact blob returned by the Go bridge.
+/// Format: `jid\tname` per line, joined by `\n`.
+fn parse_contacts(raw: &str) -> Vec<Contact> {
+    raw.lines()
+        .filter_map(|line| {
+            let (jid, name) = line.split_once('\t')?;
+            Some(Contact {
+                jid: jid.to_string(),
+                name: name.to_string(),
+            })
+        })
+        .collect()
+}
+
 #[async_trait]
 impl Backend for WhatsmeowBackend {
     async fn connect(&self) -> Result<()> {
@@ -67,8 +81,13 @@ impl Backend for WhatsmeowBackend {
     }
 
     async fn contacts(&self) -> Result<Vec<Contact>> {
-        // Contact retrieval lands with issue #9.
-        Ok(vec![])
+        // `fetch_contacts` calls into Go/sqlite — keep it off the async threads.
+        tokio::task::spawn_blocking(|| {
+            let raw = bridge::fetch_contacts()
+                .ok_or_else(|| anyhow!("fetch_contacts returned null — bridge not initialised?"))?;
+            Ok(parse_contacts(&raw))
+        })
+        .await?
     }
 
     async fn send(&self, _chat: &str, _body: &str) -> Result<()> {
@@ -91,5 +110,44 @@ impl Backend for WhatsmeowBackend {
             }
             tokio::time::sleep(Duration::from_millis(250)).await;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_contacts_decodes_tab_separated_format() {
+        let raw = "5511999990000@s.whatsapp.net\tAlice\n5511888880000@s.whatsapp.net\tBob";
+        let contacts = parse_contacts(raw);
+        assert_eq!(contacts.len(), 2);
+        assert_eq!(contacts[0].name, "Alice");
+        assert_eq!(contacts[0].jid, "5511999990000@s.whatsapp.net");
+        assert_eq!(contacts[1].name, "Bob");
+        assert_eq!(contacts[1].jid, "5511888880000@s.whatsapp.net");
+    }
+
+    #[test]
+    fn parse_contacts_handles_empty_input() {
+        let contacts = parse_contacts("");
+        assert!(contacts.is_empty());
+    }
+
+    #[test]
+    fn parse_contacts_skips_malformed_lines() {
+        let raw = "good_jid@s.whatsapp.net\tGood\nno_tab_here\nbad@s.whatsapp.net\tAlsoGood";
+        let contacts = parse_contacts(raw);
+        assert_eq!(contacts.len(), 2);
+        assert_eq!(contacts[0].name, "Good");
+        assert_eq!(contacts[1].name, "AlsoGood");
+    }
+
+    #[test]
+    fn parse_contacts_handles_trailing_newline() {
+        let raw = "a@s.whatsapp.net\tA\n";
+        let contacts = parse_contacts(raw);
+        assert_eq!(contacts.len(), 1);
+        assert_eq!(contacts[0].name, "A");
     }
 }
