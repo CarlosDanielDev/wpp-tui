@@ -97,6 +97,25 @@ fn draw_login(frame: &mut Frame, app: &App, area: Rect) {
 
 fn draw_contacts(frame: &mut Frame, app: &App, area: Rect) {
     let block = dos_block("Contacts");
+
+    if app.contacts.is_empty() {
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+        let text = if app.connected {
+            "No contacts yet — pull to refresh"
+        } else {
+            "Connecting…"
+        };
+        let para = Paragraph::new(Line::from(Span::styled(
+            text,
+            Style::default().fg(GREEN_DIM),
+        )))
+        .alignment(Alignment::Center)
+        .style(Style::default().bg(BG));
+        frame.render_widget(para, inner);
+        return;
+    }
+
     let items: Vec<ListItem> = app
         .contacts
         .iter()
@@ -124,9 +143,7 @@ fn draw_contacts(frame: &mut Frame, app: &App, area: Rect) {
     );
 
     let mut state = ListState::default();
-    if !app.contacts.is_empty() {
-        state.select(Some(app.selected));
-    }
+    state.select(Some(app.selected));
     frame.render_stateful_widget(list, area, &mut state);
 }
 
@@ -183,7 +200,7 @@ fn draw_chat(frame: &mut Frame, app: &App, area: Rect) {
 fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect) {
     let keys = match app.screen {
         Screen::Login => "F:Quit[q]",
-        Screen::Contacts => "↑↓:Move  Enter:Open  Quit[q]",
+        Screen::Contacts => "↑↓/jk:Move  Enter:Open  Quit[q]",
         Screen::Chat => "Type:Compose  Enter:Send  Esc:Back",
     };
     let bar = Line::from(vec![
@@ -279,5 +296,37 @@ mod tests {
         let out = render(&app);
         assert!(out.contains("hello there"));
         assert!(out.contains("Alice"));
+    }
+
+    #[test]
+    fn empty_contacts_shows_placeholder_message() {
+        let mut app = App::default();
+        app.apply_event(BackendEvent::Connected);
+        let out = render(&app);
+        assert!(out.contains("Contacts"));
+        assert!(out.contains("No contacts yet"));
+    }
+
+    #[test]
+    fn contacts_screen_before_connect_shows_connecting() {
+        let app = App {
+            screen: Screen::Contacts,
+            ..Default::default()
+        };
+        let out = render(&app);
+        assert!(out.contains("Contacts"));
+        assert!(out.contains("Connecting"));
+    }
+
+    #[test]
+    fn contacts_status_bar_shows_jk_navigation() {
+        let mut app = App::default();
+        app.apply_event(BackendEvent::Connected);
+        app.set_contacts(vec![Contact {
+            jid: "a@s".into(),
+            name: "Alice".into(),
+        }]);
+        let out = render(&app);
+        assert!(out.contains("jk:Move"));
     }
 }
