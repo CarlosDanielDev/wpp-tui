@@ -14,7 +14,7 @@ use crate::qr;
 
 // Retro CRT palette — DOS-era phosphor green / amber on black. Mirrors
 // maestro's `retro()` theme.
-const BG: Color = Color::Black; // terminal background
+const BG: Color = Color::Rgb(0, 0, 0); // true black (not palette black, which themes tint)
 const GREEN: Color = Color::Rgb(0, 255, 65); // phosphor green, primary text
 const GREEN_DIM: Color = Color::Rgb(0, 180, 45); // secondary text
 const AMBER: Color = Color::Rgb(255, 175, 0); // titles, focus, f-keys
@@ -23,6 +23,13 @@ const PANEL_BG: Color = Color::Rgb(0, 40, 10); // subtle green-black fill
 
 /// Draw the whole frame for the current screen.
 pub fn draw(frame: &mut Frame, app: &App) {
+    // Paint the entire terminal solid black first so no themed default
+    // background ("fog") shows through any unfilled cell.
+    frame.render_widget(
+        Block::default().style(Style::default().bg(BG)),
+        frame.area(),
+    );
+
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(1), Constraint::Length(1)])
@@ -60,13 +67,12 @@ fn draw_login(frame: &mut Frame, app: &App, area: Rect) {
     match &app.qr {
         Some(code) => {
             lines.push(Line::from(Span::styled(
-                "Scan this code in WhatsApp → Linked devices:",
+                "WhatsApp → Settings → Linked Devices → Link a device → scan:",
                 Style::default().fg(GREEN_DIM),
             )));
             lines.push(Line::from(""));
 
-            let qr_lines = qr::render_qr(code, GREEN, BG);
-            lines.extend(qr_lines);
+            lines.extend(qr::render_qr(code));
 
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
@@ -75,10 +81,14 @@ fn draw_login(frame: &mut Frame, app: &App, area: Rect) {
             )));
         }
         None => {
-            lines.push(Line::from(Span::styled(
-                "Waiting for QR code…",
-                Style::default().fg(GREEN_DIM),
-            )));
+            // Animated braille spinner while the bridge negotiates the code.
+            const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+            let spin = SPINNER[(app.tick as usize) % SPINNER.len()];
+            lines.push(Line::from(vec![
+                Span::styled(format!("{spin}  "), Style::default().fg(AMBER)),
+                Span::styled("Waiting for QR code…", Style::default().fg(GREEN_DIM)),
+                Span::styled(format!("  {spin}"), Style::default().fg(AMBER)),
+            ]));
         }
     }
     if app.connected {
@@ -102,7 +112,7 @@ fn draw_contacts(frame: &mut Frame, app: &App, area: Rect) {
         let inner = block.inner(area);
         frame.render_widget(block, area);
         let text = if app.connected {
-            "No contacts yet — pull to refresh"
+            "No contacts yet — syncing… press r to refresh"
         } else {
             "Connecting…"
         };
@@ -200,7 +210,7 @@ fn draw_chat(frame: &mut Frame, app: &App, area: Rect) {
 fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect) {
     let keys = match app.screen {
         Screen::Login => "F:Quit[q]",
-        Screen::Contacts => "↑↓/jk:Move  Enter:Open  Quit[q]",
+        Screen::Contacts => "↑↓/jk:Move  Enter:Open  r:Refresh  Quit[q]",
         Screen::Chat => "Type:Compose  Enter:Send  Esc:Back",
     };
     let bar = Line::from(vec![
@@ -225,7 +235,8 @@ mod tests {
     use ratatui::Terminal;
 
     fn render(app: &App) -> String {
-        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        // Tall enough to hold a quiet-zoned QR plus the surrounding hint lines.
+        let mut terminal = Terminal::new(TestBackend::new(80, 60)).unwrap();
         terminal.draw(|f| draw(f, app)).unwrap();
         let buffer = terminal.backend().buffer().clone();
         buffer
@@ -241,7 +252,7 @@ mod tests {
         app.apply_event(BackendEvent::Qr("MOCK-QR-SCAN-ME".into()));
         let out = render(&app);
         assert!(out.contains("Pair device"));
-        assert!(out.contains("Scan this code"));
+        assert!(out.contains("Linked Devices"));
         assert!(out.contains("Code expires"));
         assert!(!out.contains("MOCK-QR-SCAN-ME"));
         assert!(out.contains('\u{2580}') || out.contains('\u{2584}') || out.contains('\u{2588}'));

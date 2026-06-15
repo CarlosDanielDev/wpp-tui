@@ -3,73 +3,81 @@ use qrcode::QrCode;
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 
-pub fn render_qr(code: &str, fg: Color, bg: Color) -> Vec<Line<'static>> {
+// A QR must be dark modules on a light field with a 4-module quiet zone to be
+// reliably scannable — phone scanners reject inverted (light-on-dark) codes.
+// So the QR always renders black-on-white regardless of the app's theme.
+const QR_DARK: Color = Color::Rgb(0, 0, 0);
+const QR_LIGHT: Color = Color::Rgb(255, 255, 255);
+const QUIET: usize = 4;
+
+/// Render `code` as a scannable QR using half-block glyphs (two module rows per
+/// text line, so the result is roughly square in a terminal cell grid).
+pub fn render_qr(code: &str) -> Vec<Line<'static>> {
     let qr = match QrCode::new(code) {
         Ok(qr) => qr,
         Err(_) => {
             return vec![Line::from(Span::styled(
                 "Invalid QR code data",
-                Style::default().fg(fg).bg(bg),
+                Style::default().fg(QR_DARK).bg(QR_LIGHT),
             ))];
         }
     };
 
     let width = qr.width();
     let colors = qr.into_colors();
+    let light = Style::default().fg(QR_DARK).bg(QR_LIGHT);
 
-    let quiet = 1;
-    let mut lines = Vec::with_capacity(width.div_ceil(2) + quiet * 2);
+    // A blank (all-light) line spanning the code plus the left/right quiet zone.
+    let blank = || {
+        Line::from(Span::styled(
+            " ".repeat(width + QUIET * 2),
+            Style::default().bg(QR_LIGHT),
+        ))
+    };
 
-    for _ in 0..quiet {
-        lines.push(Line::from(Span::styled(
-            " ".repeat(width + quiet * 2),
-            Style::default().bg(bg),
-        )));
+    let mut lines = Vec::with_capacity(width.div_ceil(2) + QUIET * 2);
+
+    // Top quiet zone.
+    for _ in 0..QUIET {
+        lines.push(blank());
     }
 
     for y in (0..width).step_by(2) {
-        let mut spans = Vec::with_capacity(width + quiet * 2);
+        let mut spans = Vec::with_capacity(width + QUIET * 2);
 
-        for _ in 0..quiet {
-            spans.push(Span::styled(" ", Style::default().bg(bg)));
-        }
+        // Left quiet zone.
+        spans.push(Span::styled(
+            " ".repeat(QUIET),
+            Style::default().bg(QR_LIGHT),
+        ));
 
         for x in 0..width {
             let top_dark = colors[y * width + x] == QrColor::Dark;
-            let bottom_dark = if y + 1 < width {
-                colors[(y + 1) * width + x] == QrColor::Dark
-            } else {
-                false
-            };
+            let bottom_dark = y + 1 < width && colors[(y + 1) * width + x] == QrColor::Dark;
 
+            // fg paints the dark half, bg the light half — so every cell uses the
+            // same black-on-white style and only the glyph changes.
             let ch = match (top_dark, bottom_dark) {
                 (true, true) => '█',
                 (true, false) => '▀',
                 (false, true) => '▄',
                 (false, false) => ' ',
             };
-
-            let style = if top_dark || bottom_dark {
-                Style::default().fg(fg).bg(bg)
-            } else {
-                Style::default().bg(bg)
-            };
-
-            spans.push(Span::styled(ch.to_string(), style));
+            spans.push(Span::styled(ch.to_string(), light));
         }
 
-        for _ in 0..quiet {
-            spans.push(Span::styled(" ", Style::default().bg(bg)));
-        }
+        // Right quiet zone.
+        spans.push(Span::styled(
+            " ".repeat(QUIET),
+            Style::default().bg(QR_LIGHT),
+        ));
 
         lines.push(Line::from(spans));
     }
 
-    for _ in 0..quiet {
-        lines.push(Line::from(Span::styled(
-            " ".repeat(width + quiet * 2),
-            Style::default().bg(bg),
-        )));
+    // Bottom quiet zone.
+    for _ in 0..QUIET {
+        lines.push(blank());
     }
 
     lines
