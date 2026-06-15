@@ -1,5 +1,7 @@
 mod app;
 mod backend;
+#[cfg(feature = "whatsmeow")]
+mod bridge;
 mod tui;
 mod ui;
 mod widgets;
@@ -26,6 +28,17 @@ enum Tick {
 /// backend, then always restore the terminal — even if the loop errored.
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Smoke path for the Go FFI bridge: `wpp-tui --bridge-version` prints the
+    // version string read out of the linked whatsmeow c-archive and exits. Used
+    // to verify the archive built and links (see issue #5).
+    if std::env::args().any(|a| a == "--bridge-version") {
+        #[cfg(feature = "whatsmeow")]
+        println!("{}", bridge::version());
+        #[cfg(not(feature = "whatsmeow"))]
+        println!("whatsmeow feature not enabled; rebuild with --features whatsmeow");
+        return Ok(());
+    }
+
     let backend = Arc::new(MockBackend::default());
     backend.connect().await?;
 
