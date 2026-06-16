@@ -137,11 +137,11 @@ draw(Main) → visible_sidebar(app) + chat pane(open_chat)
   sidebar render**: `Screen::Main`, `Focus`, left column (search box + sidebar),
   right column (empty placeholder / chat pane), Tab/Esc focus model. Keeps the
   `visible_tail` auto-scroll work. Depends on #11, #13.
-- **NEW issue (#17): search + fuzzy + contact fallback + new chat** — `src/fuzzy.rs`,
+- **NEW issue (#29): search + fuzzy + contact fallback + new chat** — `src/fuzzy.rs`,
   `App.query`, `visible_sidebar`, contact-fallback, contact-row → blank chat start,
   `FileStore::list_chats`, `chat_order` maintenance. Depends on #12, #13, and the
   contacts fetch (already built).
-- **#13** stays; gains `FileStore::list_chats()` (used by #12/#17 to seed
+- **#13** stays; gains `FileStore::list_chats()` (used by #12/#29 to seed
   `chat_order`).
 - **#14 (presence)** — renders into the chat-pane header instead of the old
   full-screen chat header. Fold unchanged.
@@ -153,7 +153,7 @@ draw(Main) → visible_sidebar(app) + chat pane(open_chat)
 Revised build order:
 
 ```
-#11 ─┬─→ #13 ─┬─→ #12(layout) ─┬─→ #17(search)
+#11 ─┬─→ #13 ─┬─→ #12(layout) ─┬─→ #29(search)
      │        │                ├─→ #14 ─┐
      └────────┘                └─→ #15 ─┴─→ #16
 ```
