@@ -17,6 +17,10 @@ pub struct Message {
 }
 
 /// A contact's presence in a chat.
+// `Online`/`Offline` are only constructed by the whatsmeow FFI path and the
+// presence-label tests; the mock seeds only `Typing`, so the default build
+// would otherwise flag them as never-constructed.
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum Presence {
     /// Composing a message right now.

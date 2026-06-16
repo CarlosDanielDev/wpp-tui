@@ -287,9 +287,7 @@ impl App {
         match self.presence.get(jid)? {
             Presence::Typing => Some("typing…".to_string()),
             Presence::Online => Some("online".to_string()),
-            Presence::Offline {
-                last_seen: Some(t),
-            } => Some(format!("last seen {t}")),
+            Presence::Offline { last_seen: Some(t) } => Some(format!("last seen {t}")),
             Presence::Offline { last_seen: None } => Some("offline".to_string()),
         }
     }
