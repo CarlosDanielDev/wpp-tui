@@ -19,10 +19,13 @@ import (
 	"sync/atomic"
 	"unsafe"
 
-	"go.mau.fi/whatsmeow"
-	"go.mau.fi/whatsmeow/store/sqlstore"
-	"go.mau.fi/whatsmeow/types/events"
 	_ "github.com/mattn/go-sqlite3"
+	"go.mau.fi/whatsmeow"
+	"go.mau.fi/whatsmeow/proto/waE2E"
+	"go.mau.fi/whatsmeow/store/sqlstore"
+	"go.mau.fi/whatsmeow/types"
+	"go.mau.fi/whatsmeow/types/events"
+	"google.golang.org/protobuf/proto"
 )
 
 var (
@@ -33,6 +36,8 @@ var (
 	lastErr   atomic.Value
 	ctx       context.Context
 	cancelFn  context.CancelFunc
+	msgMu     sync.Mutex
+	msgQueue  []string
 )
 
 func setError(err error) {
@@ -83,11 +88,29 @@ func wpp_bridge_init(dataDir *C.char) C.int {
 	c := whatsmeow.NewClient(deviceStore, nil)
 
 	c.AddEventHandler(func(evt interface{}) {
-		switch evt.(type) {
+		switch v := evt.(type) {
 		case *events.Connected:
 			connected.Store(true)
 		case *events.Disconnected:
 			connected.Store(false)
+		case *events.Message:
+			text := v.Message.GetConversation()
+			if text == "" {
+				if ext := v.Message.GetExtendedTextMessage(); ext != nil {
+					text = ext.GetText()
+				}
+			}
+			if text == "" {
+				return // non-text message; ignore for the text-only phase
+			}
+			flag := "0"
+			if v.Info.IsFromMe {
+				flag = "1"
+			}
+			line := v.Info.Chat.String() + "\t" + flag + "\t" + text
+			msgMu.Lock()
+			msgQueue = append(msgQueue, line)
+			msgMu.Unlock()
 		}
 	})
 
@@ -249,6 +272,43 @@ func wpp_bridge_fetch_contacts() *C.char {
 	}
 
 	return C.CString(strings.Join(lines, "\n"))
+}
+
+//export wpp_bridge_send_text
+func wpp_bridge_send_text(jidStr *C.char, body *C.char) C.int {
+	mu.Lock()
+	c := client
+	mu.Unlock()
+
+	if c == nil {
+		setError(fmt.Errorf("send: bridge not initialized"))
+		return -1
+	}
+
+	to, err := types.ParseJID(C.GoString(jidStr))
+	if err != nil {
+		setError(fmt.Errorf("send: parse jid: %w", err))
+		return -2
+	}
+
+	msg := &waE2E.Message{Conversation: proto.String(C.GoString(body))}
+	if _, err := c.SendMessage(context.Background(), to, msg); err != nil {
+		setError(fmt.Errorf("send: %w", err))
+		return -3
+	}
+	return 0
+}
+
+//export wpp_bridge_poll_message
+func wpp_bridge_poll_message() *C.char {
+	msgMu.Lock()
+	defer msgMu.Unlock()
+	if len(msgQueue) == 0 {
+		return nil
+	}
+	line := msgQueue[0]
+	msgQueue = msgQueue[1:]
+	return C.CString(line)
 }
 
 func main() {}

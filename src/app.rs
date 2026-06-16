@@ -33,6 +33,8 @@ pub enum Action {
     Quit,
     /// Send `body` to the chat identified by `chat`.
     Send { chat: String, body: String },
+    /// A chat was opened — load its persisted history.
+    OpenChat { chat: String },
     /// Re-fetch the contact list from the backend.
     Refresh,
 }
@@ -62,6 +64,9 @@ pub struct App {
     pub should_quit: bool,
     /// Monotonic animation counter, bumped on each render tick. Drives spinners.
     pub tick: u64,
+    /// Chats whose persisted history has already been loaded, to avoid
+    /// re-loading (and duplicating) on every reopen.
+    pub history_loaded: std::collections::HashSet<String>,
 }
 
 impl Default for App {
@@ -79,6 +84,7 @@ impl Default for App {
             status: "Waiting for QR code…".to_string(),
             should_quit: false,
             tick: 0,
+            history_loaded: std::collections::HashSet::new(),
         }
     }
 }
@@ -157,9 +163,10 @@ impl App {
                 if let Some(contact) = self.contacts.get(self.selected) {
                     let jid = contact.jid.clone();
                     self.unread.remove(&jid);
-                    self.open_chat = Some(jid);
+                    self.open_chat = Some(jid.clone());
                     self.screen = Screen::Chat;
                     self.input.clear();
+                    return Action::OpenChat { chat: jid };
                 }
                 Action::None
             }
@@ -206,6 +213,18 @@ impl App {
         }
     }
 
+    /// Fold persisted history into the cache for a chat the first time it is
+    /// opened. Skips chats that already have any messages (live or loaded) so
+    /// it never duplicates or clobbers live traffic.
+    pub fn load_history(&mut self, chat: String, history: Vec<Message>) {
+        if self.history_loaded.contains(&chat) || self.messages.contains_key(&chat) {
+            self.history_loaded.insert(chat);
+            return;
+        }
+        self.history_loaded.insert(chat.clone());
+        self.messages.insert(chat, history);
+    }
+
     /// Messages for the currently open chat (empty slice if none).
     pub fn open_messages(&self) -> &[Message] {
         self.open_chat
@@ -241,6 +260,36 @@ mod tests {
             from_me,
             body: body.to_string(),
         }
+    }
+
+    #[test]
+    fn opening_a_chat_returns_openchat_action() {
+        let mut app = App::default();
+        app.apply_event(BackendEvent::Connected);
+        app.set_contacts(vec![Contact { jid: "a@s".into(), name: "A".into() }]);
+        let action = app.on_key(key(KeyCode::Enter));
+        assert_eq!(action, Action::OpenChat { chat: "a@s".into() });
+        assert_eq!(app.screen, Screen::Chat);
+    }
+
+    #[test]
+    fn load_history_fills_empty_chat_once() {
+        let mut app = App::default();
+        app.load_history("a@s".into(), vec![msg(false, "old1"), msg(true, "old2")]);
+        assert_eq!(app.messages.get("a@s").map(Vec::len), Some(2));
+        // Second load (e.g. reopening) must not duplicate.
+        app.load_history("a@s".into(), vec![msg(false, "old1"), msg(true, "old2")]);
+        assert_eq!(app.messages.get("a@s").map(Vec::len), Some(2));
+    }
+
+    #[test]
+    fn load_history_does_not_clobber_live_messages() {
+        let mut app = App::default();
+        app.apply_event(BackendEvent::Message { chat: "a@s".into(), msg: msg(false, "live") });
+        // History load after a live message has arrived is skipped for that chat.
+        app.load_history("a@s".into(), vec![msg(false, "old")]);
+        assert_eq!(app.messages.get("a@s").map(Vec::len), Some(1));
+        assert_eq!(app.messages["a@s"][0].body, "live");
     }
 
     #[test]
