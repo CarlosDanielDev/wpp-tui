@@ -125,13 +125,18 @@ fn draw_login(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_sidebar(frame: &mut Frame, app: &App, area: Rect) {
+    use crate::app::Kind;
+
     let focused = app.focus == Focus::Sidebar;
+    let rows = app.visible_sidebar();
     let block = dos_block_focus("Chats", focused);
 
-    if app.chat_order.is_empty() {
+    if rows.is_empty() {
         let inner = block.inner(area);
         frame.render_widget(block, area);
-        let text = if app.connected {
+        let text = if !app.query.trim().is_empty() {
+            "No matches"
+        } else if app.connected {
             "No chats yet"
         } else {
             "Connecting…"
@@ -146,28 +151,34 @@ fn draw_sidebar(frame: &mut Frame, app: &App, area: Rect) {
         return;
     }
 
-    let items: Vec<ListItem> = app
-        .chat_order
+    let items: Vec<ListItem> = rows
         .iter()
-        .map(|jid| {
-            let name = app
-                .contacts
-                .iter()
-                .find(|c| &c.jid == jid)
-                .map(|c| c.name.clone())
-                .unwrap_or_else(|| jid.clone());
-            let unread = app.unread.get(jid).copied().unwrap_or(0);
-            let label = if unread > 0 {
-                format!("{name} ({unread})")
-            } else {
-                name
-            };
-            let style = if unread > 0 {
-                Style::default().fg(AMBER).add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(GREEN)
-            };
-            ListItem::new(Line::from(Span::styled(label, style)))
+        .map(|row| {
+            match row.kind {
+                Kind::Contact => {
+                    // A contact offered to start a new chat — dim + italic, "(new)".
+                    let label = format!("{} (new)", row.name);
+                    ListItem::new(Line::from(Span::styled(
+                        label,
+                        Style::default()
+                            .fg(GREEN_DIM)
+                            .add_modifier(Modifier::ITALIC),
+                    )))
+                }
+                Kind::Chat => {
+                    let label = if row.unread > 0 {
+                        format!("{} ({})", row.name, row.unread)
+                    } else {
+                        row.name.clone()
+                    };
+                    let style = if row.unread > 0 {
+                        Style::default().fg(AMBER).add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().fg(GREEN)
+                    };
+                    ListItem::new(Line::from(Span::styled(label, style)))
+                }
+            }
         })
         .collect();
 
@@ -178,9 +189,7 @@ fn draw_sidebar(frame: &mut Frame, app: &App, area: Rect) {
             .add_modifier(Modifier::BOLD),
     );
     let mut state = ListState::default();
-    state.select(Some(
-        app.selected.min(app.chat_order.len().saturating_sub(1)),
-    ));
+    state.select(Some(app.selected.min(rows.len().saturating_sub(1))));
     frame.render_stateful_widget(list, area, &mut state);
 }
 
@@ -189,11 +198,29 @@ fn draw_main(frame: &mut Frame, app: &App, area: Rect) {
         .direction(Direction::Horizontal)
         .constraints([Constraint::Length(32), Constraint::Min(1)])
         .split(area);
-    draw_sidebar(frame, app, cols[0]);
+    let left = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(3), Constraint::Min(1)])
+        .split(cols[0]);
+    draw_search(frame, app, left[0]);
+    draw_sidebar(frame, app, left[1]);
     match app.open_chat.as_ref() {
         None => chat::draw_empty_pane(frame, cols[1]),
         Some(_) => chat::draw_chat_pane(frame, app, cols[1]),
     }
+}
+
+fn draw_search(frame: &mut Frame, app: &App, area: Rect) {
+    let focused = app.focus == Focus::Search;
+    let block = dos_block_focus("Search", focused);
+    let cursor = if focused { "_" } else { "" };
+    let para = Paragraph::new(Line::from(Span::styled(
+        format!("/{}{}", app.query, cursor),
+        Style::default().fg(AMBER),
+    )))
+    .block(block)
+    .style(Style::default().bg(BG));
+    frame.render_widget(para, area);
 }
 
 fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect) {
@@ -258,6 +285,35 @@ mod tests {
         let out = render(&app);
         assert!(out.contains("hello"));
         assert!(out.contains("✔✔")); // read marker
+    }
+
+    #[test]
+    fn search_box_shows_query_and_filters_sidebar() {
+        let mut app = App::default();
+        app.apply_event(BackendEvent::Connected);
+        app.set_contacts(vec![
+            Contact {
+                jid: "a@s".into(),
+                name: "Alice".into(),
+            },
+            Contact {
+                jid: "b@s".into(),
+                name: "Bob".into(),
+            },
+        ]);
+        app.apply_event(BackendEvent::Message {
+            chat: "a@s".into(),
+            msg: Message::incoming("1"),
+        });
+        app.apply_event(BackendEvent::Message {
+            chat: "b@s".into(),
+            msg: Message::incoming("2"),
+        });
+        app.query = "ali".into();
+        let out = render(&app);
+        assert!(out.contains("ali")); // query echoed in the search box
+        assert!(out.contains("Alice")); // matching chat
+        assert!(!out.contains("Bob")); // filtered out
     }
 
     #[test]
