@@ -12,7 +12,7 @@ use std::time::Duration;
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 
-use super::{Backend, BackendEvent, Contact};
+use super::{Backend, BackendEvent, Contact, Message};
 use crate::bridge;
 
 /// Directory holding the whatsmeow SQLite session store. Overridable so several
@@ -61,6 +61,21 @@ fn parse_contacts(raw: &str) -> Vec<Contact> {
             })
         })
         .collect()
+}
+
+/// Parse one incoming-message line from the Go bridge.
+/// Format: `jid\tflag\tbody`, where flag is "1" if the message is from us.
+/// `body` may itself contain tabs, so split only on the first two.
+fn parse_incoming(raw: &str) -> Option<(String, Message)> {
+    let (jid, rest) = raw.split_once('\t')?;
+    let (flag, body) = rest.split_once('\t')?;
+    Some((
+        jid.to_string(),
+        Message {
+            from_me: flag == "1",
+            body: body.to_string(),
+        },
+    ))
 }
 
 #[async_trait]
@@ -149,5 +164,26 @@ mod tests {
         let contacts = parse_contacts(raw);
         assert_eq!(contacts.len(), 1);
         assert_eq!(contacts[0].name, "A");
+    }
+
+    #[test]
+    fn parse_incoming_decodes_jid_flag_body() {
+        let (chat, msg) = parse_incoming("5511999990000@s.whatsapp.net\t0\thello").unwrap();
+        assert_eq!(chat, "5511999990000@s.whatsapp.net");
+        assert!(!msg.from_me);
+        assert_eq!(msg.body, "hello");
+    }
+
+    #[test]
+    fn parse_incoming_keeps_tabs_in_body() {
+        let (_, msg) = parse_incoming("a@s.whatsapp.net\t0\ta\tb").unwrap();
+        assert_eq!(msg.body, "a\tb");
+    }
+
+    #[test]
+    fn parse_incoming_rejects_malformed() {
+        assert!(parse_incoming("").is_none());
+        assert!(parse_incoming("only_jid").is_none());
+        assert!(parse_incoming("jid\t0").is_none());
     }
 }
