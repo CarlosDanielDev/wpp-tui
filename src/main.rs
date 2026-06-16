@@ -1,5 +1,6 @@
 mod app;
 mod backend;
+mod fuzzy;
 #[cfg(feature = "whatsmeow")]
 mod bridge;
 mod qr;
