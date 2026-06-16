@@ -16,7 +16,7 @@ use crossterm::event::{self, Event, KeyEventKind};
 use tokio::sync::mpsc;
 
 use app::{Action, App};
-use backend::{Backend, BackendEvent, MockBackend};
+use backend::{Backend, BackendEvent, Message, MockBackend};
 use tui::Term;
 
 /// Things the event loop reacts to: backend pushes and user keystrokes,
@@ -83,6 +83,9 @@ async fn refresh_contacts(backend: &Arc<dyn Backend>, app: &mut App) {
 async fn run(terminal: &mut Term, app: &mut App, backend: Arc<dyn Backend>) -> Result<()> {
     let (tx, mut rx) = mpsc::channel::<Tick>(64);
 
+    let data_dir = std::env::var("WPP_DATA_DIR").unwrap_or_else(|_| "wpp-data".to_string());
+    let store = store::FileStore::new(&data_dir);
+
     // Producer: drain backend events forever.
     let event_backend = Arc::clone(&backend);
     let event_tx = tx.clone();
@@ -132,6 +135,9 @@ async fn run(terminal: &mut Term, app: &mut App, backend: Arc<dyn Backend>) -> R
     while let Some(tick) = rx.recv().await {
         match tick {
             Tick::Backend(ev) => {
+                if let BackendEvent::Message { chat, msg } = &ev {
+                    let _ = store.append(chat, msg);
+                }
                 let was_connected = app.connected;
                 app.apply_event(ev);
                 // On the first successful pairing, pull the contact list. The
@@ -147,7 +153,13 @@ async fn run(terminal: &mut Term, app: &mut App, backend: Arc<dyn Backend>) -> R
                     app.should_quit = true;
                 }
                 Action::Send { chat, body } => {
+                    let _ = store.append(&chat, &Message { from_me: true, body: body.clone() });
                     backend.send(&chat, &body).await?;
+                }
+                Action::OpenChat { chat } => {
+                    if let Ok(history) = store.load(&chat) {
+                        app.load_history(chat, history);
+                    }
                 }
                 Action::Refresh => refresh_contacts(&backend, app).await,
             },
