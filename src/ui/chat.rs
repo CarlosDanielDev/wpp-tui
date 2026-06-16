@@ -25,10 +25,13 @@ pub(super) fn draw_chat_pane(frame: &mut Frame, app: &App, area: Rect) {
         .constraints([Constraint::Min(1), Constraint::Length(3)])
         .split(area);
 
-    let title = app
-        .open_chat_name()
-        .map(|n| format!("Chat — {n}"))
-        .unwrap_or_else(|| "Chat".to_string());
+    let title = {
+        let name = app.open_chat_name().unwrap_or_else(|| "Chat".to_string());
+        match app.presence_label() {
+            Some(p) => format!("Chat — {name} · {p}"),
+            None => format!("Chat — {name}"),
+        }
+    };
     let history_block = dos_block_focus(&title, false);
 
     // -2 for the history block's top/bottom borders.
