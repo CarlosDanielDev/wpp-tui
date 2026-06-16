@@ -20,8 +20,11 @@ import (
 	"unsafe"
 
 	"go.mau.fi/whatsmeow"
+	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/store/sqlstore"
+	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
+	"google.golang.org/protobuf/proto"
 	_ "github.com/mattn/go-sqlite3"
 )
 
@@ -249,6 +252,31 @@ func wpp_bridge_fetch_contacts() *C.char {
 	}
 
 	return C.CString(strings.Join(lines, "\n"))
+}
+
+//export wpp_bridge_send_text
+func wpp_bridge_send_text(jidStr *C.char, body *C.char) C.int {
+	mu.Lock()
+	c := client
+	mu.Unlock()
+
+	if c == nil {
+		setError(fmt.Errorf("send: bridge not initialized"))
+		return -1
+	}
+
+	to, err := types.ParseJID(C.GoString(jidStr))
+	if err != nil {
+		setError(fmt.Errorf("send: parse jid: %w", err))
+		return -2
+	}
+
+	msg := &waE2E.Message{Conversation: proto.String(C.GoString(body))}
+	if _, err := c.SendMessage(context.Background(), to, msg); err != nil {
+		setError(fmt.Errorf("send: %w", err))
+		return -3
+	}
+	return 0
 }
 
 func main() {}
