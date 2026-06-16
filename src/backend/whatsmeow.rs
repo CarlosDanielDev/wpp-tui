@@ -188,6 +188,12 @@ impl Backend for WhatsmeowBackend {
             if bridge::is_connected() && !self.connected_emitted.swap(true, Ordering::SeqCst) {
                 return Ok(BackendEvent::Connected);
             }
+            // Connection dropped after we'd reported Connected: emit Disconnected
+            // once and reset the latch so a later reconnect re-emits Connected.
+            if self.connected_emitted.load(Ordering::SeqCst) && !bridge::is_connected() {
+                self.connected_emitted.store(false, Ordering::SeqCst);
+                return Ok(BackendEvent::Disconnected);
+            }
             if let Some(err) = bridge::last_error() {
                 return Err(anyhow!("whatsmeow bridge error: {err}"));
             }

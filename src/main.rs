@@ -3,8 +3,10 @@ mod backend;
 #[cfg(feature = "whatsmeow")]
 mod bridge;
 mod fuzzy;
+mod notify;
 mod qr;
 mod store;
+mod theme;
 mod tui;
 mod ui;
 mod widgets;
@@ -50,7 +52,10 @@ async fn main() -> Result<()> {
     // Contacts are fetched lazily once the backend reports `Connected` (see the
     // event loop) — the real bridge has no contacts until the device is paired,
     // so fetching here would fail before the QR is ever shown.
-    let mut app = App::default();
+    let mut app = App {
+        theme: theme::Theme::from_env(),
+        ..App::default()
+    };
 
     let mut terminal = tui::init()?;
     let result = run(&mut terminal, &mut app, backend).await;
@@ -147,6 +152,9 @@ async fn run(terminal: &mut Term, app: &mut App, backend: Arc<dyn Backend>) -> R
             Tick::Backend(ev) => {
                 if let BackendEvent::Message { chat, msg } = &ev {
                     let _ = store.append(chat, msg);
+                }
+                if let Some(text) = notify::notify_text(app, &ev) {
+                    notify::fire(&text);
                 }
                 let was_connected = app.connected;
                 app.apply_event(ev);

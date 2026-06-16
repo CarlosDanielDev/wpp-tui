@@ -4,31 +4,24 @@
 //! F-key status bar along the bottom.
 
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
 
 use crate::app::{App, Focus, Screen};
 use crate::qr;
+use crate::theme::Theme;
 
 mod chat;
 
-// Retro CRT palette — DOS-era phosphor green / amber on black. Mirrors
-// maestro's `retro()` theme. The `chat` submodule reads these via `super::`.
-const BG: Color = Color::Rgb(0, 0, 0); // true black (not palette black, which themes tint)
-const GREEN: Color = Color::Rgb(0, 255, 65); // phosphor green, primary text
-const GREEN_DIM: Color = Color::Rgb(0, 180, 45); // secondary text
-const AMBER: Color = Color::Rgb(255, 175, 0); // titles, focus, f-keys
-const AMBER_DK: Color = Color::Rgb(255, 140, 0); // active border, selection
-const PANEL_BG: Color = Color::Rgb(0, 40, 10); // subtle green-black fill
-
 /// Draw the whole frame for the current screen.
 pub fn draw(frame: &mut Frame, app: &App) {
+    let t = &app.theme;
     // Paint the entire terminal solid black first so no themed default
     // background ("fog") shows through any unfilled cell.
     frame.render_widget(
-        Block::default().style(Style::default().bg(BG)),
+        Block::default().style(Style::default().bg(t.bg)),
         frame.area(),
     );
 
@@ -42,43 +35,75 @@ pub fn draw(frame: &mut Frame, app: &App) {
         Screen::Main => draw_main(frame, app, chunks[0]),
     }
     draw_status_bar(frame, app, chunks[1]);
+
+    if let Some(text) = &app.overlay {
+        draw_overlay(frame, app, text);
+    }
 }
 
-fn dos_block(title: &str) -> Block<'_> {
+/// A centred modal box floated over the current screen (e.g. disconnect status).
+fn draw_overlay(frame: &mut Frame, app: &App, text: &str) {
+    let t = &app.theme;
+    let area = frame.area();
+    let w = (text.chars().count() as u16 + 6).min(area.width);
+    let h = 5u16.min(area.height);
+    let x = area.x + (area.width.saturating_sub(w)) / 2;
+    let y = area.y + (area.height.saturating_sub(h)) / 2;
+    let rect = Rect {
+        x,
+        y,
+        width: w,
+        height: h,
+    };
+    frame.render_widget(ratatui::widgets::Clear, rect);
+    let block = dos_block(" ! ", t);
+    let inner = block.inner(rect);
+    frame.render_widget(block, rect);
+    let para = Paragraph::new(Line::from(Span::styled(
+        text.to_string(),
+        Style::default().fg(t.accent),
+    )))
+    .alignment(Alignment::Center)
+    .style(Style::default().bg(t.bg));
+    frame.render_widget(para, inner);
+}
+
+fn dos_block<'a>(title: &'a str, t: &Theme) -> Block<'a> {
     Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Double)
-        .border_style(Style::default().fg(AMBER_DK).bg(BG))
-        .style(Style::default().bg(BG).fg(GREEN))
+        .border_style(Style::default().fg(t.accent_dk).bg(t.bg))
+        .style(Style::default().bg(t.bg).fg(t.primary))
         .title(Span::styled(
             format!(" {title} "),
             Style::default()
-                .fg(AMBER)
-                .bg(BG)
+                .fg(t.accent)
+                .bg(t.bg)
                 .add_modifier(Modifier::BOLD),
         ))
 }
 
-/// Like [`dos_block`] but the border brightens (amber) when the region is
-/// focused, dims (green) otherwise. (#16 will thread `app.theme` through here.)
-fn dos_block_focus(title: &str, focused: bool) -> Block<'_> {
-    let border = if focused { AMBER_DK } else { GREEN_DIM };
+/// Like [`dos_block`] but the border brightens (accent) when the region is
+/// focused, dims otherwise.
+fn dos_block_focus<'a>(title: &'a str, t: &Theme, focused: bool) -> Block<'a> {
+    let border = if focused { t.accent_dk } else { t.dim };
     Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Double)
-        .border_style(Style::default().fg(border).bg(BG))
-        .style(Style::default().bg(BG).fg(GREEN))
+        .border_style(Style::default().fg(border).bg(t.bg))
+        .style(Style::default().bg(t.bg).fg(t.primary))
         .title(Span::styled(
             format!(" {title} "),
             Style::default()
-                .fg(AMBER)
-                .bg(BG)
+                .fg(t.accent)
+                .bg(t.bg)
                 .add_modifier(Modifier::BOLD),
         ))
 }
 
 fn draw_login(frame: &mut Frame, app: &App, area: Rect) {
-    let block = dos_block("wpp-tui — Pair device");
+    let t = &app.theme;
+    let block = dos_block("wpp-tui — Pair device", t);
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -87,7 +112,7 @@ fn draw_login(frame: &mut Frame, app: &App, area: Rect) {
         Some(code) => {
             lines.push(Line::from(Span::styled(
                 "WhatsApp → Settings → Linked Devices → Link a device → scan:",
-                Style::default().fg(GREEN_DIM),
+                Style::default().fg(t.dim),
             )));
             lines.push(Line::from(""));
 
@@ -96,7 +121,7 @@ fn draw_login(frame: &mut Frame, app: &App, area: Rect) {
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
                 "Code expires in ~30s — a new one will appear automatically",
-                Style::default().fg(GREEN_DIM),
+                Style::default().fg(t.dim),
             )));
         }
         None => {
@@ -104,9 +129,9 @@ fn draw_login(frame: &mut Frame, app: &App, area: Rect) {
             const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
             let spin = SPINNER[(app.tick as usize) % SPINNER.len()];
             lines.push(Line::from(vec![
-                Span::styled(format!("{spin}  "), Style::default().fg(AMBER)),
-                Span::styled("Waiting for QR code…", Style::default().fg(GREEN_DIM)),
-                Span::styled(format!("  {spin}"), Style::default().fg(AMBER)),
+                Span::styled(format!("{spin}  "), Style::default().fg(t.accent)),
+                Span::styled("Waiting for QR code…", Style::default().fg(t.dim)),
+                Span::styled(format!("  {spin}"), Style::default().fg(t.accent)),
             ]));
         }
     }
@@ -114,22 +139,23 @@ fn draw_login(frame: &mut Frame, app: &App, area: Rect) {
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
             "Connected!",
-            Style::default().fg(GREEN).add_modifier(Modifier::BOLD),
+            Style::default().fg(t.primary).add_modifier(Modifier::BOLD),
         )));
     }
 
     let para = Paragraph::new(lines)
         .alignment(Alignment::Center)
-        .style(Style::default().bg(BG));
+        .style(Style::default().bg(t.bg));
     frame.render_widget(para, inner);
 }
 
 fn draw_sidebar(frame: &mut Frame, app: &App, area: Rect) {
     use crate::app::Kind;
 
+    let t = &app.theme;
     let focused = app.focus == Focus::Sidebar;
     let rows = app.visible_sidebar();
-    let block = dos_block_focus("Chats", focused);
+    let block = dos_block_focus("Chats", t, focused);
 
     if rows.is_empty() {
         let inner = block.inner(area);
@@ -141,12 +167,9 @@ fn draw_sidebar(frame: &mut Frame, app: &App, area: Rect) {
         } else {
             "Connecting…"
         };
-        let para = Paragraph::new(Line::from(Span::styled(
-            text,
-            Style::default().fg(GREEN_DIM),
-        )))
-        .alignment(Alignment::Center)
-        .style(Style::default().bg(BG));
+        let para = Paragraph::new(Line::from(Span::styled(text, Style::default().fg(t.dim))))
+            .alignment(Alignment::Center)
+            .style(Style::default().bg(t.bg));
         frame.render_widget(para, inner);
         return;
     }
@@ -160,9 +183,7 @@ fn draw_sidebar(frame: &mut Frame, app: &App, area: Rect) {
                     let label = format!("{} (new)", row.name);
                     ListItem::new(Line::from(Span::styled(
                         label,
-                        Style::default()
-                            .fg(GREEN_DIM)
-                            .add_modifier(Modifier::ITALIC),
+                        Style::default().fg(t.dim).add_modifier(Modifier::ITALIC),
                     )))
                 }
                 Kind::Chat => {
@@ -172,9 +193,9 @@ fn draw_sidebar(frame: &mut Frame, app: &App, area: Rect) {
                         row.name.clone()
                     };
                     let style = if row.unread > 0 {
-                        Style::default().fg(AMBER).add_modifier(Modifier::BOLD)
+                        Style::default().fg(t.accent).add_modifier(Modifier::BOLD)
                     } else {
-                        Style::default().fg(GREEN)
+                        Style::default().fg(t.primary)
                     };
                     ListItem::new(Line::from(Span::styled(label, style)))
                 }
@@ -184,8 +205,8 @@ fn draw_sidebar(frame: &mut Frame, app: &App, area: Rect) {
 
     let list = List::new(items).block(block).highlight_style(
         Style::default()
-            .bg(AMBER_DK)
-            .fg(BG)
+            .bg(t.accent_dk)
+            .fg(t.bg)
             .add_modifier(Modifier::BOLD),
     );
     let mut state = ListState::default();
@@ -205,25 +226,27 @@ fn draw_main(frame: &mut Frame, app: &App, area: Rect) {
     draw_search(frame, app, left[0]);
     draw_sidebar(frame, app, left[1]);
     match app.open_chat.as_ref() {
-        None => chat::draw_empty_pane(frame, cols[1]),
+        None => chat::draw_empty_pane(frame, app, cols[1]),
         Some(_) => chat::draw_chat_pane(frame, app, cols[1]),
     }
 }
 
 fn draw_search(frame: &mut Frame, app: &App, area: Rect) {
+    let t = &app.theme;
     let focused = app.focus == Focus::Search;
-    let block = dos_block_focus("Search", focused);
+    let block = dos_block_focus("Search", t, focused);
     let cursor = if focused { "_" } else { "" };
     let para = Paragraph::new(Line::from(Span::styled(
         format!("/{}{}", app.query, cursor),
-        Style::default().fg(AMBER),
+        Style::default().fg(t.accent),
     )))
     .block(block)
-    .style(Style::default().bg(BG));
+    .style(Style::default().bg(t.bg));
     frame.render_widget(para, area);
 }
 
 fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect) {
+    let t = &app.theme;
     let keys = match (app.screen, app.focus) {
         (Screen::Login, _) => "Quit[q]",
         (Screen::Main, Focus::Search) => "Type to filter  Enter/Tab:Next  Esc:Chats",
@@ -234,13 +257,16 @@ fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect) {
         Span::styled(
             format!(" {} ", app.status),
             Style::default()
-                .bg(AMBER)
-                .fg(BG)
+                .bg(t.accent)
+                .fg(t.bg)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(format!("  {keys}"), Style::default().bg(PANEL_BG).fg(GREEN)),
+        Span::styled(
+            format!("  {keys}"),
+            Style::default().bg(t.panel_bg).fg(t.primary),
+        ),
     ]);
-    let para = Paragraph::new(bar).style(Style::default().bg(BG));
+    let para = Paragraph::new(bar).style(Style::default().bg(t.bg));
     frame.render_widget(para, area);
 }
 
@@ -438,6 +464,16 @@ mod tests {
         }]);
         let out = render(&app);
         assert!(out.contains("jk:Move"));
+    }
+
+    #[test]
+    fn overlay_modal_is_drawn_over_any_screen() {
+        let mut app = App::default();
+        app.apply_event(BackendEvent::Connected);
+        app.apply_event(BackendEvent::Disconnected);
+        let out = render(&app);
+        assert!(out.contains("Disconnected"));
+        assert!(out.contains("reconnecting"));
     }
 
     #[test]

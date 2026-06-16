@@ -102,6 +102,10 @@ pub struct App {
     pub presence: std::collections::HashMap<String, Presence>,
     /// Monotonic counter for stamping outgoing messages with a unique local id.
     pub msg_seq: u64,
+    /// Active colour theme. Set from `WPP_THEME` at startup.
+    pub theme: crate::theme::Theme,
+    /// When set, a modal overlay (e.g. disconnect/reconnect status) is shown.
+    pub overlay: Option<String>,
 }
 
 impl Default for App {
@@ -125,6 +129,8 @@ impl Default for App {
             history_loaded: std::collections::HashSet::new(),
             presence: std::collections::HashMap::new(),
             msg_seq: 0,
+            theme: crate::theme::Theme::retro(),
+            overlay: None,
         }
     }
 }
@@ -227,12 +233,17 @@ impl App {
             }
             BackendEvent::Connected => {
                 self.connected = true;
+                self.overlay = None;
                 // Advance off the login screen on first connect only.
                 if self.screen == Screen::Login {
                     self.screen = Screen::Main;
                     self.focus = Focus::Sidebar;
                 }
                 self.status = "Connected".to_string();
+            }
+            BackendEvent::Disconnected => {
+                self.connected = false;
+                self.overlay = Some("Disconnected — reconnecting…".to_string());
             }
             BackendEvent::Message { chat, msg } => {
                 let focused =
@@ -969,6 +980,19 @@ mod tests {
             app.presence_label().as_deref(),
             Some("last seen today 14:05")
         );
+    }
+
+    #[test]
+    fn disconnect_sets_overlay_and_connect_clears_it() {
+        let mut app = App::default();
+        app.apply_event(BackendEvent::Connected);
+        app.apply_event(BackendEvent::Disconnected);
+        assert!(app.overlay.is_some());
+        assert!(!app.connected);
+        // Reconnecting dismisses the overlay.
+        app.apply_event(BackendEvent::Connected);
+        assert!(app.overlay.is_none());
+        assert!(app.connected);
     }
 
     #[test]
