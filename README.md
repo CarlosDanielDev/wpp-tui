@@ -39,6 +39,40 @@ toolchain) in the QR-login phase.
 The transport sits behind a `Backend` trait with two implementations:
 `MockBackend` (default) and `WhatsmeowBackend` (real, feature-gated).
 
+## Usage
+
+### Build & run (mock backend — no account, no Go toolchain)
+
+```bash
+cargo run            # simulated WhatsApp: seeded QR, contacts, a message
+```
+
+### Build & run (real WhatsApp via whatsmeow)
+
+Requires a Go toolchain.
+
+```bash
+cargo run --features whatsmeow           # scan the QR with WhatsApp → Linked Devices
+cargo run --features whatsmeow -- --mock # force the mock backend even with the feature on
+```
+
+### Keys
+
+- Contacts: `↑↓`/`jk` move · `Enter` open · `r`/`F5` refresh · `q`/`Esc` quit
+- Search: `Tab` from the sidebar focuses the Search box; type to fuzzy-filter,
+  `Enter`/`Tab` move on, `Esc` back to the chat list
+- Chat: type to compose · `Enter` send · `Tab`/`Esc` back to the sidebar
+
+### Config
+
+- `WPP_THEME=retro|amber` — colour theme (default `retro`)
+- `WPP_DATA_DIR=path` — session + message store location (default `wpp-data`)
+
+### Notifications
+
+Incoming messages for chats you're not viewing fire a desktop notification
+(`osascript` on macOS, `notify-send` on Linux).
+
 ## Development
 
 This project is built phase-by-phase via GitHub issues, orchestrated with
