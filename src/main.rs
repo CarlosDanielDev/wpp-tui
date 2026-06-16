@@ -3,6 +3,7 @@ mod backend;
 #[cfg(feature = "whatsmeow")]
 mod bridge;
 mod fuzzy;
+mod notify;
 mod qr;
 mod store;
 mod tui;
@@ -147,6 +148,9 @@ async fn run(terminal: &mut Term, app: &mut App, backend: Arc<dyn Backend>) -> R
             Tick::Backend(ev) => {
                 if let BackendEvent::Message { chat, msg } = &ev {
                     let _ = store.append(chat, msg);
+                }
+                if let Some(text) = notify::notify_text(app, &ev) {
+                    notify::fire(&text);
                 }
                 let was_connected = app.connected;
                 app.apply_event(ev);
