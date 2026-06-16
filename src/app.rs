@@ -53,6 +53,8 @@ pub struct App {
     /// Set once the backend reports a successful pairing.
     pub connected: bool,
     pub contacts: Vec<Contact>,
+    /// JIDs that have messages, most-recent-activity first. Drives the sidebar.
+    pub chat_order: Vec<String>,
     /// Cursor into `contacts` on the contacts screen.
     pub selected: usize,
     /// Per-chat message history, keyed by chat JID.
@@ -82,6 +84,7 @@ impl Default for App {
             qr: None,
             connected: false,
             contacts: Vec::new(),
+            chat_order: Vec::new(),
             selected: 0,
             messages: HashMap::new(),
             open_chat: None,
@@ -106,6 +109,14 @@ impl App {
         self.contacts = contacts;
     }
 
+    /// Move `chat` to the front of the sidebar order (insert if new).
+    fn front_chat(&mut self, chat: &str) {
+        if let Some(pos) = self.chat_order.iter().position(|c| c == chat) {
+            self.chat_order.remove(pos);
+        }
+        self.chat_order.insert(0, chat.to_string());
+    }
+
     /// Fold a backend event into state. Pure: no I/O, no redraw.
     pub fn apply_event(&mut self, event: BackendEvent) {
         match event {
@@ -127,6 +138,7 @@ impl App {
                 let focused = self.focus == Focus::Input
                     && self.open_chat.as_deref() == Some(chat.as_str());
                 self.messages.entry(chat.clone()).or_default().push(msg);
+                self.front_chat(&chat);
                 if !focused {
                     *self.unread.entry(chat).or_insert(0) += 1;
                 }
@@ -216,6 +228,7 @@ impl App {
                         from_me: true,
                         body: body.clone(),
                     });
+                self.front_chat(&chat);
                 Action::Send { chat, body }
             }
             _ => Action::None,
@@ -460,6 +473,47 @@ mod tests {
         assert_eq!(app.focus, Focus::Input);
         app.on_key(key(KeyCode::Esc));
         assert_eq!(app.focus, Focus::Sidebar);
+    }
+
+    #[test]
+    fn incoming_message_fronts_chat_order() {
+        let mut app = App::default();
+        app.apply_event(BackendEvent::Message {
+            chat: "a@s".into(),
+            msg: msg(false, "1"),
+        });
+        app.apply_event(BackendEvent::Message {
+            chat: "b@s".into(),
+            msg: msg(false, "2"),
+        });
+        assert_eq!(app.chat_order, vec!["b@s".to_string(), "a@s".to_string()]);
+        // New activity on an existing chat moves it to the front, no duplicate.
+        app.apply_event(BackendEvent::Message {
+            chat: "a@s".into(),
+            msg: msg(false, "3"),
+        });
+        assert_eq!(app.chat_order, vec!["a@s".to_string(), "b@s".to_string()]);
+    }
+
+    #[test]
+    fn sending_fronts_chat_order() {
+        let mut app = App::default();
+        app.apply_event(BackendEvent::Connected);
+        app.set_contacts(vec![Contact {
+            jid: "a@s".into(),
+            name: "A".into(),
+        }]);
+        app.apply_event(BackendEvent::Message {
+            chat: "z@s".into(),
+            msg: msg(false, "x"),
+        });
+        app.open_chat = Some("a@s".into());
+        app.focus = Focus::Input;
+        for c in "hi".chars() {
+            app.on_key(key(KeyCode::Char(c)));
+        }
+        app.on_key(key(KeyCode::Enter)); // send
+        assert_eq!(app.chat_order.first().map(String::as_str), Some("a@s"));
     }
 
     #[test]
