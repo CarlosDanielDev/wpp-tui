@@ -51,6 +51,21 @@ func setError(err error) {
 	lastErr.Store(err.Error())
 }
 
+// canonicalChat returns a stable, phone-number-form JID string for a chat, so a
+// single person is never split across their LID (@lid) and phone-number
+// (@s.whatsapp.net) identities. Device (AD) suffixes are stripped; an @lid JID
+// is mapped to its phone number via the LID store when a mapping is known.
+// Groups, broadcast, newsletters, etc. pass through unchanged (sans device).
+func canonicalChat(c *whatsmeow.Client, jid types.JID) string {
+	jid = jid.ToNonAD()
+	if jid.Server == types.HiddenUserServer && c.Store != nil && c.Store.LIDs != nil {
+		if pn, err := c.Store.LIDs.GetPNForLID(context.Background(), jid); err == nil && !pn.IsEmpty() {
+			return pn.ToNonAD().String()
+		}
+	}
+	return jid.String()
+}
+
 //export wpp_bridge_version
 func wpp_bridge_version() *C.char {
 	return C.CString("0.2.0")
@@ -111,7 +126,7 @@ func wpp_bridge_init(dataDir *C.char) C.int {
 			if v.Info.IsFromMe {
 				flag = "1"
 			}
-			line := v.Info.Chat.String() + "\t" + flag + "\t" + text
+			line := canonicalChat(c, v.Info.Chat) + "\t" + flag + "\t" + text
 			msgMu.Lock()
 			msgQueue = append(msgQueue, line)
 			msgMu.Unlock()
@@ -121,7 +136,7 @@ func wpp_bridge_init(dataDir *C.char) C.int {
 			if v.State == types.ChatPresenceComposing {
 				state = "typing"
 			}
-			line := v.MessageSource.Chat.String() + "\t" + state + "\t"
+			line := canonicalChat(c, v.MessageSource.Chat) + "\t" + state + "\t"
 			presMu.Lock()
 			presQueue = append(presQueue, line)
 			presMu.Unlock()
@@ -133,9 +148,9 @@ func wpp_bridge_init(dataDir *C.char) C.int {
 				if !v.LastSeen.IsZero() {
 					lastSeen = v.LastSeen.Local().Format("2006-01-02 15:04")
 				}
-				line = v.From.String() + "\toffline\t" + lastSeen
+				line = canonicalChat(c, v.From) + "\toffline\t" + lastSeen
 			} else {
-				line = v.From.String() + "\tonline\t"
+				line = canonicalChat(c, v.From) + "\tonline\t"
 			}
 			presMu.Lock()
 			presQueue = append(presQueue, line)
@@ -156,7 +171,7 @@ func wpp_bridge_init(dataDir *C.char) C.int {
 			for i, id := range v.MessageIDs {
 				ids[i] = string(id)
 			}
-			line := v.MessageSource.Chat.String() + "\t" + state + "\t" + strings.Join(ids, ",")
+			line := canonicalChat(c, v.MessageSource.Chat) + "\t" + state + "\t" + strings.Join(ids, ",")
 			rcptMu.Lock()
 			rcptQueue = append(rcptQueue, line)
 			rcptMu.Unlock()
@@ -302,22 +317,35 @@ func wpp_bridge_fetch_contacts() *C.char {
 		return nil
 	}
 
-	var lines []string
+	// Collapse a contact's LID and phone-number entries onto one canonical key,
+	// keeping the highest-priority name (saved FullName beats pushname) so the
+	// sidebar shows one row per person instead of two.
+	type cinfo struct {
+		name string
+		rank int
+	}
+	best := make(map[string]cinfo)
 	for jid, info := range contacts {
-		name := info.FullName
-		if name == "" {
-			name = info.PushName
+		name, rank := jid.User, 0
+		switch {
+		case info.FullName != "":
+			name, rank = info.FullName, 4
+		case info.PushName != "":
+			name, rank = info.PushName, 3
+		case info.BusinessName != "":
+			name, rank = info.BusinessName, 2
+		case info.FirstName != "":
+			name, rank = info.FirstName, 1
 		}
-		if name == "" {
-			name = info.BusinessName
+		key := canonicalChat(c, jid)
+		if cur, ok := best[key]; !ok || rank > cur.rank {
+			best[key] = cinfo{name: name, rank: rank}
 		}
-		if name == "" {
-			name = info.FirstName
-		}
-		if name == "" {
-			name = jid.User
-		}
-		lines = append(lines, jid.String()+"\t"+name)
+	}
+
+	var lines []string
+	for jid, ci := range best {
+		lines = append(lines, jid+"\t"+ci.name)
 	}
 
 	return C.CString(strings.Join(lines, "\n"))

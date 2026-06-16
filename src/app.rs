@@ -160,6 +160,22 @@ impl App {
         self.front_chat(jid);
     }
 
+    /// Keep the sidebar highlight glued to the open chat after `chat_order`
+    /// changes (open, send, or an incoming message re-fronting a chat). Only
+    /// applies with no active query, where `selected` indexes `chat_order`
+    /// directly; with a query the selection indexes the filtered list and is
+    /// left alone.
+    fn sync_selection_to_open(&mut self) {
+        if !self.query.trim().is_empty() {
+            return;
+        }
+        if let Some(open) = self.open_chat.as_deref() {
+            if let Some(pos) = self.chat_order.iter().position(|c| c == open) {
+                self.selected = pos;
+            }
+        }
+    }
+
     fn display_name(&self, jid: &str) -> String {
         self.contacts
             .iter()
@@ -250,6 +266,7 @@ impl App {
                     self.focus == Focus::Input && self.open_chat.as_deref() == Some(chat.as_str());
                 self.messages.entry(chat.clone()).or_default().push(msg);
                 self.front_chat(&chat);
+                self.sync_selection_to_open();
                 if !focused {
                     *self.unread.entry(chat).or_insert(0) += 1;
                 }
@@ -345,7 +362,7 @@ impl App {
                     self.focus = Focus::Input;
                     self.input.clear();
                     self.query.clear();
-                    self.selected = 0;
+                    self.sync_selection_to_open();
                     return Action::OpenChat { chat: jid };
                 }
                 Action::None
@@ -391,6 +408,7 @@ impl App {
                 m.status = DeliveryState::Sent;
                 self.messages.entry(chat.clone()).or_default().push(m);
                 self.front_chat(&chat);
+                self.sync_selection_to_open();
                 Action::Send { id, chat, body }
             }
             _ => Action::None,
@@ -457,6 +475,58 @@ mod tests {
             body: body.to_string(),
             status: DeliveryState::Sent,
         }
+    }
+
+    #[test]
+    fn opening_a_chat_highlights_that_chat_not_row_zero() {
+        let mut app = App::default();
+        app.apply_event(BackendEvent::Connected);
+        // chat_order ends up [c, b, a] (most-recent first).
+        app.apply_event(BackendEvent::Message {
+            chat: "a@s".into(),
+            msg: msg(false, "1"),
+        });
+        app.apply_event(BackendEvent::Message {
+            chat: "b@s".into(),
+            msg: msg(false, "2"),
+        });
+        app.apply_event(BackendEvent::Message {
+            chat: "c@s".into(),
+            msg: msg(false, "3"),
+        });
+        // Navigate the cursor to "a@s" (index 2) and open it.
+        app.selected = 2;
+        let action = app.on_key(key(KeyCode::Enter));
+        assert_eq!(app.open_chat.as_deref(), Some("a@s"));
+        assert_eq!(action, Action::OpenChat { chat: "a@s".into() });
+        // Highlight must stay on the opened chat, NOT jump to row 0.
+        assert_eq!(app.selected, 2);
+    }
+
+    #[test]
+    fn incoming_to_background_chat_keeps_open_chat_highlighted() {
+        let mut app = App::default();
+        app.apply_event(BackendEvent::Connected);
+        app.apply_event(BackendEvent::Message {
+            chat: "a@s".into(),
+            msg: msg(false, "1"),
+        });
+        app.apply_event(BackendEvent::Message {
+            chat: "b@s".into(),
+            msg: msg(false, "2"),
+        });
+        // chat_order = [b, a]; open "a@s" (index 1).
+        app.selected = 1;
+        app.on_key(key(KeyCode::Enter));
+        assert_eq!(app.selected, 1);
+        // A message to a NEW background chat fronts it → [c, b, a]; "a@s" now index 2.
+        app.apply_event(BackendEvent::Message {
+            chat: "c@s".into(),
+            msg: msg(false, "3"),
+        });
+        assert_eq!(app.open_chat.as_deref(), Some("a@s"));
+        // Highlight follows the open chat to its new index.
+        assert_eq!(app.selected, 2);
     }
 
     #[test]
