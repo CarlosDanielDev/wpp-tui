@@ -47,7 +47,9 @@ fn unescape(s: &str) -> String {
 
 impl FileStore {
     pub fn new(root: impl AsRef<Path>) -> Self {
-        Self { root: root.as_ref().join("chats") }
+        Self {
+            root: root.as_ref().join("chats"),
+        }
     }
 
     fn path_for(&self, jid: &str) -> PathBuf {
@@ -82,7 +84,10 @@ impl FileStore {
             .lines()
             .filter_map(|line| {
                 let (flag, body) = line.split_once('\t')?;
-                Some(Message { from_me: flag == "1", body: unescape(body) })
+                Some(Message {
+                    from_me: flag == "1",
+                    body: unescape(body),
+                })
             })
             .collect())
     }
@@ -94,7 +99,10 @@ mod tests {
     use crate::backend::Message;
 
     fn msg(from_me: bool, body: &str) -> Message {
-        Message { from_me, body: body.to_string() }
+        Message {
+            from_me,
+            body: body.to_string(),
+        }
     }
 
     #[test]

@@ -6,15 +6,16 @@
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Borders, List, ListItem, ListState, Paragraph, Wrap};
+use ratatui::widgets::{Block, BorderType, Borders, List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
 
 use crate::app::{App, Focus, Screen};
-use crate::backend::Message;
 use crate::qr;
 
+mod chat;
+
 // Retro CRT palette — DOS-era phosphor green / amber on black. Mirrors
-// maestro's `retro()` theme.
+// maestro's `retro()` theme. The `chat` submodule reads these via `super::`.
 const BG: Color = Color::Rgb(0, 0, 0); // true black (not palette black, which themes tint)
 const GREEN: Color = Color::Rgb(0, 255, 65); // phosphor green, primary text
 const GREEN_DIM: Color = Color::Rgb(0, 180, 45); // secondary text
@@ -123,63 +124,6 @@ fn draw_login(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(para, inner);
 }
 
-/// Last `rows` messages — the slice visible when the pane sticks to the bottom.
-fn visible_tail(messages: &[Message], rows: usize) -> &[Message] {
-    let start = messages.len().saturating_sub(rows);
-    &messages[start..]
-}
-
-fn draw_chat_pane(frame: &mut Frame, app: &App, area: Rect) {
-    let rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(1), Constraint::Length(3)])
-        .split(area);
-
-    let title = app
-        .open_chat_name()
-        .map(|n| format!("Chat — {n}"))
-        .unwrap_or_else(|| "Chat".to_string());
-    let history_block = dos_block_focus(&title, false);
-
-    // -2 for the history block's top/bottom borders.
-    let visible_rows = (rows[0].height as usize).saturating_sub(2);
-    let lines: Vec<Line> = visible_tail(app.open_messages(), visible_rows)
-        .iter()
-        .map(|m| {
-            if m.from_me {
-                Line::from(vec![
-                    Span::styled("→ ", Style::default().fg(AMBER)),
-                    Span::styled(m.body.clone(), Style::default().fg(GREEN)),
-                ])
-            } else {
-                Line::from(vec![
-                    Span::styled("← ", Style::default().fg(GREEN_DIM)),
-                    Span::styled(m.body.clone(), Style::default().fg(GREEN)),
-                ])
-            }
-        })
-        .collect();
-    let history = Paragraph::new(lines)
-        .block(history_block)
-        .wrap(Wrap { trim: false })
-        .style(Style::default().bg(BG));
-    frame.render_widget(history, rows[0]);
-
-    let input_block = dos_block_focus("Message", app.focus == Focus::Input);
-    let input = Paragraph::new(Line::from(vec![
-        Span::styled(&app.input, Style::default().fg(AMBER)),
-        Span::styled(
-            "_",
-            Style::default()
-                .fg(AMBER)
-                .add_modifier(Modifier::SLOW_BLINK),
-        ),
-    ]))
-    .block(input_block)
-    .style(Style::default().bg(BG));
-    frame.render_widget(input, rows[1]);
-}
-
 fn draw_sidebar(frame: &mut Frame, app: &App, area: Rect) {
     let focused = app.focus == Focus::Sidebar;
     let block = dos_block_focus("Chats", focused);
@@ -247,22 +191,9 @@ fn draw_main(frame: &mut Frame, app: &App, area: Rect) {
         .split(area);
     draw_sidebar(frame, app, cols[0]);
     match app.open_chat.as_ref() {
-        None => draw_empty_pane(frame, cols[1]),
-        Some(_) => draw_chat_pane(frame, app, cols[1]),
+        None => chat::draw_empty_pane(frame, cols[1]),
+        Some(_) => chat::draw_chat_pane(frame, app, cols[1]),
     }
-}
-
-fn draw_empty_pane(frame: &mut Frame, area: Rect) {
-    let block = dos_block_focus("", false);
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-    let para = Paragraph::new(Line::from(Span::styled(
-        "No chat selected — pick one on the left",
-        Style::default().fg(GREEN_DIM),
-    )))
-    .alignment(Alignment::Center)
-    .style(Style::default().bg(BG));
-    frame.render_widget(para, inner);
 }
 
 fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect) {
