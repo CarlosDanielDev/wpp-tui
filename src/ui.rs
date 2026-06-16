@@ -57,6 +57,24 @@ fn dos_block(title: &str) -> Block<'_> {
         ))
 }
 
+/// Like [`dos_block`] but the border brightens (amber) when the region is
+/// focused, dims (green) otherwise. (#16 will thread `app.theme` through here.)
+fn dos_block_focus(title: &str, focused: bool) -> Block<'_> {
+    let border = if focused { AMBER_DK } else { GREEN_DIM };
+    Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Double)
+        .border_style(Style::default().fg(border).bg(BG))
+        .style(Style::default().bg(BG).fg(GREEN))
+        .title(Span::styled(
+            format!(" {title} "),
+            Style::default()
+                .fg(AMBER)
+                .bg(BG)
+                .add_modifier(Modifier::BOLD),
+        ))
+}
+
 fn draw_login(frame: &mut Frame, app: &App, area: Rect) {
     let block = dos_block("wpp-tui — Pair device");
     let inner = block.inner(area);
@@ -206,9 +224,67 @@ fn draw_chat(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(input, rows[1]);
 }
 
-// Temporary shim: Tasks 3–4 build the real two-pane `draw_main`.
+fn draw_sidebar(frame: &mut Frame, app: &App, area: Rect) {
+    let focused = app.focus == Focus::Sidebar;
+    let block = dos_block_focus("Chats", focused);
+
+    if app.chat_order.is_empty() {
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+        let text = if app.connected {
+            "No chats yet"
+        } else {
+            "Connecting…"
+        };
+        let para = Paragraph::new(Line::from(Span::styled(
+            text,
+            Style::default().fg(GREEN_DIM),
+        )))
+        .alignment(Alignment::Center)
+        .style(Style::default().bg(BG));
+        frame.render_widget(para, inner);
+        return;
+    }
+
+    let items: Vec<ListItem> = app
+        .chat_order
+        .iter()
+        .map(|jid| {
+            let name = app
+                .contacts
+                .iter()
+                .find(|c| &c.jid == jid)
+                .map(|c| c.name.clone())
+                .unwrap_or_else(|| jid.clone());
+            let unread = app.unread.get(jid).copied().unwrap_or(0);
+            let label = if unread > 0 {
+                format!("{name} ({unread})")
+            } else {
+                name
+            };
+            let style = if unread > 0 {
+                Style::default().fg(AMBER).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(GREEN)
+            };
+            ListItem::new(Line::from(Span::styled(label, style)))
+        })
+        .collect();
+
+    let list = List::new(items).block(block).highlight_style(
+        Style::default()
+            .bg(AMBER_DK)
+            .fg(BG)
+            .add_modifier(Modifier::BOLD),
+    );
+    let mut state = ListState::default();
+    state.select(Some(app.selected.min(app.chat_order.len().saturating_sub(1))));
+    frame.render_stateful_widget(list, area, &mut state);
+}
+
+// Temporary shim: Task 4 builds the real two-pane `draw_main`.
 fn draw_main(frame: &mut Frame, app: &App, area: Rect) {
-    draw_contacts(frame, app, area);
+    draw_sidebar(frame, app, area);
 }
 
 fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect) {
@@ -263,7 +339,7 @@ mod tests {
     }
 
     #[test]
-    fn contacts_screen_lists_names_and_unread() {
+    fn sidebar_lists_chats_not_all_contacts() {
         let mut app = App::default();
         app.apply_event(BackendEvent::Connected);
         app.set_contacts(vec![
@@ -276,6 +352,7 @@ mod tests {
                 name: "Bob".into(),
             },
         ]);
+        // Only Alice has a conversation.
         app.apply_event(BackendEvent::Message {
             chat: "a@s".into(),
             msg: Message {
@@ -285,54 +362,27 @@ mod tests {
         });
         let out = render(&app);
         assert!(out.contains("Alice"));
-        assert!(out.contains("Bob"));
-        // Unread badge.
-        assert!(out.contains("(1)"));
+        assert!(!out.contains("Bob")); // Bob has no chat → not in the sidebar
+        assert!(out.contains("(1)")); // unread badge
     }
 
     #[test]
-    // Superseded by Task 4's `main_open_chat_shows_pane_with_history_and_input`;
-    // the `draw_main` shim cannot render the chat pane yet. Removed in Task 4.
-    #[ignore]
-    fn chat_screen_shows_messages() {
-        let mut app = App::default();
-        app.apply_event(BackendEvent::Connected);
-        app.set_contacts(vec![Contact {
-            jid: "a@s".into(),
-            name: "Alice".into(),
-        }]);
-        app.apply_event(BackendEvent::Message {
-            chat: "a@s".into(),
-            msg: Message {
-                from_me: false,
-                body: "hello there".into(),
-            },
-        });
-        // Open Alice's chat.
-        use crossterm::event::{KeyCode, KeyEvent};
-        app.on_key(KeyEvent::from(KeyCode::Enter));
-        let out = render(&app);
-        assert!(out.contains("hello there"));
-        assert!(out.contains("Alice"));
-    }
-
-    #[test]
-    fn empty_contacts_shows_placeholder_message() {
+    fn empty_sidebar_shows_placeholder_message() {
         let mut app = App::default();
         app.apply_event(BackendEvent::Connected);
         let out = render(&app);
-        assert!(out.contains("Contacts"));
-        assert!(out.contains("No contacts yet"));
+        assert!(out.contains("Chats"));
+        assert!(out.contains("No chats yet"));
     }
 
     #[test]
-    fn contacts_screen_before_connect_shows_connecting() {
+    fn sidebar_before_connect_shows_connecting() {
         let app = App {
             screen: Screen::Main,
             ..Default::default()
         };
         let out = render(&app);
-        assert!(out.contains("Contacts"));
+        assert!(out.contains("Chats"));
         assert!(out.contains("Connecting"));
     }
 

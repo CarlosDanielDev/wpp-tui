@@ -175,14 +175,13 @@ impl App {
                 Action::None
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                if self.selected + 1 < self.contacts.len() {
+                if self.selected + 1 < self.chat_order.len() {
                     self.selected += 1;
                 }
                 Action::None
             }
             KeyCode::Enter => {
-                if let Some(contact) = self.contacts.get(self.selected) {
-                    let jid = contact.jid.clone();
+                if let Some(jid) = self.chat_order.get(self.selected).cloned() {
                     self.unread.remove(&jid);
                     self.open_chat = Some(jid.clone());
                     self.focus = Focus::Input;
@@ -289,6 +288,7 @@ mod tests {
         let mut app = App::default();
         app.apply_event(BackendEvent::Connected);
         app.set_contacts(vec![Contact { jid: "a@s".into(), name: "A".into() }]);
+        app.apply_event(BackendEvent::Message { chat: "a@s".into(), msg: msg(false, "hi") });
         let action = app.on_key(key(KeyCode::Enter));
         assert_eq!(action, Action::OpenChat { chat: "a@s".into() });
         assert_eq!(app.screen, Screen::Main);
@@ -341,6 +341,10 @@ mod tests {
             jid: "a@s".into(),
             name: "A".into(),
         }]);
+        app.apply_event(BackendEvent::Message {
+            chat: "a@s".into(),
+            msg: msg(false, "hi"),
+        });
         app.on_key(key(KeyCode::Enter));
         assert!(app.open_chat.is_some());
         // A re-connect event must not interrupt an open conversation: the
@@ -368,12 +372,18 @@ mod tests {
             name: "A".into(),
         }]);
         app.apply_event(BackendEvent::Connected);
+        // Seed the chat so it appears in `chat_order`, then open it (clears unread).
+        app.apply_event(BackendEvent::Message {
+            chat: "a@s".into(),
+            msg: msg(false, "seed"),
+        });
         app.on_key(key(KeyCode::Enter));
+        // A further message to the focused chat must not mark it unread.
         app.apply_event(BackendEvent::Message {
             chat: "a@s".into(),
             msg: msg(false, "hi"),
         });
-        assert_eq!(app.open_messages().len(), 1);
+        assert_eq!(app.open_messages().len(), 2);
         assert_eq!(app.unread.get("a@s"), None);
     }
 
@@ -391,6 +401,15 @@ mod tests {
                 name: "B".into(),
             },
         ]);
+        // Sidebar navigates `chat_order`; seed two chats via incoming messages.
+        app.apply_event(BackendEvent::Message {
+            chat: "a@s".into(),
+            msg: msg(false, "1"),
+        });
+        app.apply_event(BackendEvent::Message {
+            chat: "b@s".into(),
+            msg: msg(false, "2"),
+        });
         app.on_key(key(KeyCode::Up)); // already at top
         assert_eq!(app.selected, 0);
         app.on_key(key(KeyCode::Down));
@@ -424,6 +443,10 @@ mod tests {
             jid: "a@s".into(),
             name: "A".into(),
         }]);
+        app.apply_event(BackendEvent::Message {
+            chat: "a@s".into(),
+            msg: msg(false, "hi"),
+        });
         app.on_key(key(KeyCode::Enter)); // open chat
         for c in "yo".chars() {
             app.on_key(key(KeyCode::Char(c)));
@@ -438,10 +461,12 @@ mod tests {
             }
         );
         assert!(app.input.is_empty());
+        // Seeded incoming "hi" plus the echoed outgoing "yo".
         let sent = app.open_messages();
-        assert_eq!(sent.len(), 1);
-        assert!(sent[0].from_me);
-        assert_eq!(sent[0].body, "yo");
+        assert_eq!(sent.len(), 2);
+        let last = sent.last().unwrap();
+        assert!(last.from_me);
+        assert_eq!(last.body, "yo");
     }
 
     #[test]
@@ -452,9 +477,14 @@ mod tests {
             jid: "a@s".into(),
             name: "A".into(),
         }]);
+        app.apply_event(BackendEvent::Message {
+            chat: "a@s".into(),
+            msg: msg(false, "hi"),
+        });
         app.on_key(key(KeyCode::Enter));
         assert_eq!(app.on_key(key(KeyCode::Enter)), Action::None);
-        assert!(app.open_messages().is_empty());
+        // Only the seeded incoming message exists; the empty send added nothing.
+        assert_eq!(app.open_messages().len(), 1);
     }
 
     #[test]
