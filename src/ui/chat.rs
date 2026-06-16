@@ -10,12 +10,22 @@ use ratatui::Frame;
 
 use super::{dos_block_focus, AMBER, BG, GREEN, GREEN_DIM};
 use crate::app::{App, Focus};
-use crate::backend::Message;
+use crate::backend::{DeliveryState, Message};
 
 /// Last `rows` messages — the slice visible when the pane sticks to the bottom.
 pub(super) fn visible_tail(messages: &[Message], rows: usize) -> &[Message] {
     let start = messages.len().saturating_sub(rows);
     &messages[start..]
+}
+
+/// DOS-style delivery marker for an outgoing message. Heavy check = read.
+fn delivery_marker(state: DeliveryState) -> &'static str {
+    match state {
+        DeliveryState::Sending => "·",
+        DeliveryState::Sent => "✓",
+        DeliveryState::Delivered => "✓✓",
+        DeliveryState::Read => "✔✔",
+    }
 }
 
 /// Render the open chat: a bottom-stuck history above a compose input box.
@@ -71,6 +81,20 @@ pub(super) fn draw_chat_pane(frame: &mut Frame, app: &App, area: Rect) {
     .block(input_block)
     .style(Style::default().bg(BG));
     frame.render_widget(input, rows[1]);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn delivery_markers_are_distinct_per_state() {
+        use crate::backend::DeliveryState::*;
+        assert_eq!(delivery_marker(Sending), "·");
+        assert_eq!(delivery_marker(Sent), "✓");
+        assert_eq!(delivery_marker(Delivered), "✓✓");
+        assert_eq!(delivery_marker(Read), "✔✔");
+    }
 }
 
 /// Placeholder shown in the right pane when no chat is open.
