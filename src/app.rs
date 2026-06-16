@@ -10,6 +10,23 @@ use std::collections::HashMap;
 use crossterm::event::{KeyCode, KeyEvent};
 
 use crate::backend::{BackendEvent, Contact, DeliveryState, Message, Presence};
+use crate::fuzzy::fuzzy_score;
+
+/// Whether a sidebar row is an existing chat or a contact offered to start one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    Chat,
+    Contact,
+}
+
+/// One rendered sidebar row.
+#[derive(Debug, Clone)]
+pub struct Row {
+    pub jid: String,
+    pub name: String,
+    pub unread: usize,
+    pub kind: Kind,
+}
 
 /// Top-level screen. Login is the QR pairing screen; Main is the persistent
 /// two-pane layout shown after connecting.
@@ -129,6 +146,69 @@ impl App {
             self.chat_order.remove(pos);
         }
         self.chat_order.insert(0, chat.to_string());
+    }
+
+    fn display_name(&self, jid: &str) -> String {
+        self.contacts
+            .iter()
+            .find(|c| c.jid == jid)
+            .map(|c| c.name.clone())
+            .unwrap_or_else(|| jid.to_string())
+    }
+
+    /// The sidebar rows for the current query: chats first; if none match, fall
+    /// back to fuzzy-matched contacts.
+    pub fn visible_sidebar(&self) -> Vec<Row> {
+        let q = self.query.trim();
+        // Chat rows (fuzzy-filtered when there's a query), preserving chat_order
+        // on empty query and sorting by score otherwise.
+        let mut chats: Vec<(i32, Row)> = self
+            .chat_order
+            .iter()
+            .filter_map(|jid| {
+                let name = self.display_name(jid);
+                let score = if q.is_empty() {
+                    Some(0)
+                } else {
+                    fuzzy_score(q, &name).or_else(|| fuzzy_score(q, jid))
+                }?;
+                Some((
+                    score,
+                    Row {
+                        jid: jid.clone(),
+                        name,
+                        unread: self.unread.get(jid).copied().unwrap_or(0),
+                        kind: Kind::Chat,
+                    },
+                ))
+            })
+            .collect();
+        if !q.is_empty() {
+            // Stable: higher score first, original order on ties.
+            chats.sort_by(|a, b| b.0.cmp(&a.0));
+        }
+        if !chats.is_empty() || q.is_empty() {
+            return chats.into_iter().map(|(_, r)| r).collect();
+        }
+        // Zero chat matches and a non-empty query → contact fallback.
+        let mut contacts: Vec<(i32, Row)> = self
+            .contacts
+            .iter()
+            .filter_map(|c| {
+                let score = fuzzy_score(q, &c.name).or_else(|| fuzzy_score(q, &c.jid))?;
+                Some((
+                    score,
+                    Row {
+                        jid: c.jid.clone(),
+                        name: c.name.clone(),
+                        unread: 0,
+                        kind: Kind::Contact,
+                    },
+                ))
+            })
+            .collect();
+        contacts.sort_by(|a, b| b.0.cmp(&a.0));
+        contacts.into_iter().map(|(_, r)| r).collect()
     }
 
     /// Fold a backend event into state. Pure: no I/O, no redraw.
@@ -630,6 +710,76 @@ mod tests {
         assert_eq!(app.on_key(key(KeyCode::Enter)), Action::None);
         // Only the seeded incoming message exists; the empty send added nothing.
         assert_eq!(app.open_messages().len(), 1);
+    }
+
+    #[test]
+    fn visible_sidebar_empty_query_lists_all_chats() {
+        let mut app = App::default();
+        app.apply_event(BackendEvent::Message {
+            chat: "a@s".into(),
+            msg: msg(false, "1"),
+        });
+        app.apply_event(BackendEvent::Message {
+            chat: "b@s".into(),
+            msg: msg(false, "2"),
+        });
+        let rows = app.visible_sidebar();
+        assert_eq!(rows.len(), 2);
+        assert!(rows.iter().all(|r| r.kind == Kind::Chat));
+    }
+
+    #[test]
+    fn visible_sidebar_filters_chats_by_query() {
+        let mut app = App::default();
+        app.set_contacts(vec![
+            Contact {
+                jid: "a@s".into(),
+                name: "Alice".into(),
+            },
+            Contact {
+                jid: "b@s".into(),
+                name: "Bob".into(),
+            },
+        ]);
+        app.apply_event(BackendEvent::Message {
+            chat: "a@s".into(),
+            msg: msg(false, "1"),
+        });
+        app.apply_event(BackendEvent::Message {
+            chat: "b@s".into(),
+            msg: msg(false, "2"),
+        });
+        app.query = "ali".into();
+        let rows = app.visible_sidebar();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].name, "Alice");
+        assert_eq!(rows[0].kind, Kind::Chat);
+    }
+
+    #[test]
+    fn visible_sidebar_falls_back_to_contacts_when_no_chat_matches() {
+        let mut app = App::default();
+        app.set_contacts(vec![
+            Contact {
+                jid: "a@s".into(),
+                name: "Alice".into(),
+            },
+            Contact {
+                jid: "z@s".into(),
+                name: "Zara".into(),
+            },
+        ]);
+        // Only Alice has a chat; query matches Zara (a contact, no chat).
+        app.apply_event(BackendEvent::Message {
+            chat: "a@s".into(),
+            msg: msg(false, "1"),
+        });
+        app.query = "zar".into();
+        let rows = app.visible_sidebar();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].name, "Zara");
+        assert_eq!(rows[0].kind, Kind::Contact);
+        assert_eq!(rows[0].jid, "z@s");
     }
 
     #[test]
