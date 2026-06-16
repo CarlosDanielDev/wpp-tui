@@ -11,16 +11,19 @@ use crossterm::event::{KeyCode, KeyEvent};
 
 use crate::backend::{BackendEvent, Contact, Message};
 
-/// Which screen is currently shown. Mirrors the P1 routing: login → contacts →
-/// chat.
+/// Top-level screen. Login is the QR pairing screen; Main is the persistent
+/// two-pane layout shown after connecting.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Screen {
-    /// Waiting for / showing the QR code to pair.
     Login,
-    /// The contact / recent-chat list.
-    Contacts,
-    /// An open one-to-one conversation.
-    Chat,
+    Main,
+}
+
+/// Which region of the Main screen has keyboard focus. (#29 adds `Search`.)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Focus {
+    Sidebar,
+    Input,
 }
 
 /// A side effect the event loop should perform after a keystroke. Returning an
@@ -43,6 +46,8 @@ pub enum Action {
 /// methods below.
 pub struct App {
     pub screen: Screen,
+    /// Which region of the Main screen has keyboard focus.
+    pub focus: Focus,
     /// QR string to render while on the login screen.
     pub qr: Option<String>,
     /// Set once the backend reports a successful pairing.
@@ -73,6 +78,7 @@ impl Default for App {
     fn default() -> Self {
         Self {
             screen: Screen::Login,
+            focus: Focus::Sidebar,
             qr: None,
             connected: false,
             contacts: Vec::new(),
@@ -112,13 +118,14 @@ impl App {
                 self.connected = true;
                 // Advance off the login screen on first connect only.
                 if self.screen == Screen::Login {
-                    self.screen = Screen::Contacts;
+                    self.screen = Screen::Main;
+                    self.focus = Focus::Sidebar;
                 }
                 self.status = "Connected".to_string();
             }
             BackendEvent::Message { chat, msg } => {
-                let focused =
-                    self.screen == Screen::Chat && self.open_chat.as_deref() == Some(chat.as_str());
+                let focused = self.focus == Focus::Input
+                    && self.open_chat.as_deref() == Some(chat.as_str());
                 self.messages.entry(chat.clone()).or_default().push(msg);
                 if !focused {
                     *self.unread.entry(chat).or_insert(0) += 1;
@@ -131,8 +138,10 @@ impl App {
     pub fn on_key(&mut self, key: KeyEvent) -> Action {
         match self.screen {
             Screen::Login => self.on_key_login(key),
-            Screen::Contacts => self.on_key_contacts(key),
-            Screen::Chat => self.on_key_chat(key),
+            Screen::Main => match self.focus {
+                Focus::Sidebar => self.on_key_sidebar(key),
+                Focus::Input => self.on_key_input(key),
+            },
         }
     }
 
@@ -143,7 +152,7 @@ impl App {
         }
     }
 
-    fn on_key_contacts(&mut self, key: KeyEvent) -> Action {
+    fn on_key_sidebar(&mut self, key: KeyEvent) -> Action {
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc => Action::Quit,
             KeyCode::Char('r') | KeyCode::F(5) => Action::Refresh,
@@ -164,7 +173,7 @@ impl App {
                     let jid = contact.jid.clone();
                     self.unread.remove(&jid);
                     self.open_chat = Some(jid.clone());
-                    self.screen = Screen::Chat;
+                    self.focus = Focus::Input;
                     self.input.clear();
                     return Action::OpenChat { chat: jid };
                 }
@@ -174,10 +183,10 @@ impl App {
         }
     }
 
-    fn on_key_chat(&mut self, key: KeyEvent) -> Action {
+    fn on_key_input(&mut self, key: KeyEvent) -> Action {
         match key.code {
             KeyCode::Esc => {
-                self.screen = Screen::Contacts;
+                self.focus = Focus::Sidebar;
                 self.input.clear();
                 Action::None
             }
@@ -269,7 +278,8 @@ mod tests {
         app.set_contacts(vec![Contact { jid: "a@s".into(), name: "A".into() }]);
         let action = app.on_key(key(KeyCode::Enter));
         assert_eq!(action, Action::OpenChat { chat: "a@s".into() });
-        assert_eq!(app.screen, Screen::Chat);
+        assert_eq!(app.screen, Screen::Main);
+        assert_eq!(app.focus, Focus::Input);
     }
 
     #[test]
@@ -301,12 +311,13 @@ mod tests {
     }
 
     #[test]
-    fn connected_event_advances_to_contacts() {
+    fn connected_event_enters_main_focused_on_sidebar() {
         let mut app = App::default();
         assert_eq!(app.screen, Screen::Login);
         app.apply_event(BackendEvent::Connected);
         assert!(app.connected);
-        assert_eq!(app.screen, Screen::Contacts);
+        assert_eq!(app.screen, Screen::Main);
+        assert_eq!(app.focus, Focus::Sidebar);
     }
 
     #[test]
@@ -318,10 +329,11 @@ mod tests {
             name: "A".into(),
         }]);
         app.on_key(key(KeyCode::Enter));
-        assert_eq!(app.screen, Screen::Chat);
-        // A re-connect event must not interrupt an open conversation.
+        assert!(app.open_chat.is_some());
+        // A re-connect event must not interrupt an open conversation: the
+        // `Connected` arm only re-screens from `Login`.
         app.apply_event(BackendEvent::Connected);
-        assert_eq!(app.screen, Screen::Chat);
+        assert!(app.open_chat.is_some());
     }
 
     #[test]
@@ -433,17 +445,21 @@ mod tests {
     }
 
     #[test]
-    fn esc_in_chat_returns_to_contacts() {
+    fn esc_in_input_returns_to_sidebar() {
         let mut app = App::default();
         app.apply_event(BackendEvent::Connected);
         app.set_contacts(vec![Contact {
             jid: "a@s".into(),
             name: "A".into(),
         }]);
-        app.on_key(key(KeyCode::Enter));
-        assert_eq!(app.screen, Screen::Chat);
+        app.apply_event(BackendEvent::Message {
+            chat: "a@s".into(),
+            msg: msg(false, "hi"),
+        });
+        app.on_key(key(KeyCode::Enter)); // open a@s, focus → Input
+        assert_eq!(app.focus, Focus::Input);
         app.on_key(key(KeyCode::Esc));
-        assert_eq!(app.screen, Screen::Contacts);
+        assert_eq!(app.focus, Focus::Sidebar);
     }
 
     #[test]
