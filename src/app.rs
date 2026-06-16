@@ -156,6 +156,15 @@ impl App {
             BackendEvent::Presence { chat, state } => {
                 self.presence.insert(chat, state);
             }
+            BackendEvent::Receipt { chat, ids, state } => {
+                if let Some(msgs) = self.messages.get_mut(&chat) {
+                    for m in msgs.iter_mut() {
+                        if ids.iter().any(|id| id == &m.id) && state.rank() > m.status.rank() {
+                            m.status = state;
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -544,6 +553,32 @@ mod tests {
             }
             other => panic!("expected Send, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn receipt_advances_status_without_regressing() {
+        let mut app = App::default();
+        // Seed an outgoing message with a known id.
+        app.messages
+            .entry("a@s".into())
+            .or_default()
+            .push(Message::outgoing("m1", "hey"));
+        app.messages.get_mut("a@s").unwrap()[0].status = DeliveryState::Sent;
+
+        app.apply_event(BackendEvent::Receipt {
+            chat: "a@s".into(),
+            ids: vec!["m1".into()],
+            state: DeliveryState::Read,
+        });
+        assert_eq!(app.messages["a@s"][0].status, DeliveryState::Read);
+
+        // A late Delivered receipt must NOT pull it back from Read.
+        app.apply_event(BackendEvent::Receipt {
+            chat: "a@s".into(),
+            ids: vec!["m1".into()],
+            state: DeliveryState::Delivered,
+        });
+        assert_eq!(app.messages["a@s"][0].status, DeliveryState::Read);
     }
 
     #[test]

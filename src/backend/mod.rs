@@ -91,6 +91,12 @@ pub enum BackendEvent {
     Message { chat: String, msg: Message },
     /// A presence update for a chat.
     Presence { chat: String, state: Presence },
+    /// Delivery receipt(s) advancing message status for a chat.
+    Receipt {
+        chat: String,
+        ids: Vec<String>,
+        state: DeliveryState,
+    },
 }
 
 /// Transport abstraction. The real implementation talks to whatsmeow over FFI;
