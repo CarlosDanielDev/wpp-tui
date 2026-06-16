@@ -148,6 +148,12 @@ impl App {
         self.chat_order.insert(0, chat.to_string());
     }
 
+    /// Public seeder for `front_chat`, used at startup to restore the sidebar
+    /// from the persisted store.
+    pub fn front_chat_pub(&mut self, jid: &str) {
+        self.front_chat(jid);
+    }
+
     fn display_name(&self, jid: &str) -> String {
         self.contacts
             .iter()
@@ -185,7 +191,7 @@ impl App {
             .collect();
         if !q.is_empty() {
             // Stable: higher score first, original order on ties.
-            chats.sort_by(|a, b| b.0.cmp(&a.0));
+            chats.sort_by_key(|r| std::cmp::Reverse(r.0));
         }
         if !chats.is_empty() || q.is_empty() {
             return chats.into_iter().map(|(_, r)| r).collect();
@@ -207,7 +213,7 @@ impl App {
                 ))
             })
             .collect();
-        contacts.sort_by(|a, b| b.0.cmp(&a.0));
+        contacts.sort_by_key(|r| std::cmp::Reverse(r.0));
         contacts.into_iter().map(|(_, r)| r).collect()
     }
 

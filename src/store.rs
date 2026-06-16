@@ -56,11 +56,43 @@ impl FileStore {
         self.root.join(format!("{}.log", sanitise(jid)))
     }
 
+    /// Record `jid` once in the chat index so it can be listed at startup even
+    /// though the log filename is a lossy sanitisation of the JID.
+    fn record_chat(&self, jid: &str) -> Result<()> {
+        let idx = self.root.join("chats.index");
+        let existing = std::fs::read_to_string(&idx).unwrap_or_default();
+        if existing.lines().any(|l| l == jid) {
+            return Ok(());
+        }
+        use std::io::Write;
+        let mut f = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&idx)?;
+        writeln!(f, "{jid}")?;
+        Ok(())
+    }
+
+    /// All chat JIDs known to the store, in index order.
+    pub fn list_chats(&self) -> Result<Vec<String>> {
+        let idx = self.root.join("chats.index");
+        match std::fs::read_to_string(&idx) {
+            Ok(s) => Ok(s
+                .lines()
+                .filter(|l| !l.is_empty())
+                .map(String::from)
+                .collect()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+            Err(e) => Err(e.into()),
+        }
+    }
+
     /// Append one message to the chat's log, creating the directory/file.
     pub fn append(&self, jid: &str, msg: &Message) -> Result<()> {
         use std::io::Write;
         std::fs::create_dir_all(&self.root)
             .with_context(|| format!("create store dir {:?}", self.root))?;
+        self.record_chat(jid)?;
         let flag = if msg.from_me { '1' } else { '0' };
         let line = format!("{flag}\t{}\n", escape(&msg.body));
         let mut f = std::fs::OpenOptions::new()
@@ -122,6 +154,25 @@ mod tests {
         assert_eq!(loaded[0].body, "hello");
         assert!(!loaded[1].from_me);
         assert_eq!(loaded[1].body, "hi there");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn list_chats_returns_known_jids() {
+        let dir = std::env::temp_dir().join(format!("wpp-list-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = FileStore::new(&dir);
+        store.append("a@s.whatsapp.net", &msg(false, "x")).unwrap();
+        store.append("b@s.whatsapp.net", &msg(true, "y")).unwrap();
+        let mut chats = store.list_chats().unwrap();
+        chats.sort();
+        assert_eq!(
+            chats,
+            vec![
+                "a@s.whatsapp.net".to_string(),
+                "b@s.whatsapp.net".to_string()
+            ]
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
