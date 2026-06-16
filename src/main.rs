@@ -152,8 +152,8 @@ async fn run(terminal: &mut Term, app: &mut App, backend: Arc<dyn Backend>) -> R
                 Action::Quit => {
                     app.should_quit = true;
                 }
-                Action::Send { chat, body } => {
-                    let _ = store.append(&chat, &Message::outgoing(String::new(), body.clone()));
+                Action::Send { id, chat, body } => {
+                    let _ = store.append(&chat, &Message::outgoing(id.clone(), body.clone()));
                     backend.send(&chat, &body).await?;
                 }
                 Action::OpenChat { chat } => {

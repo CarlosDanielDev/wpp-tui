@@ -34,8 +34,12 @@ pub enum Action {
     None,
     /// Tear down the TUI and exit.
     Quit,
-    /// Send `body` to the chat identified by `chat`.
-    Send { chat: String, body: String },
+    /// Send `body` to the chat identified by `chat`, stamped with local `id`.
+    Send {
+        id: String,
+        chat: String,
+        body: String,
+    },
     /// A chat was opened — load its persisted history.
     OpenChat { chat: String },
     /// Re-fetch the contact list from the backend.
@@ -76,6 +80,8 @@ pub struct App {
     pub history_loaded: std::collections::HashSet<String>,
     /// Latest presence per chat JID.
     pub presence: std::collections::HashMap<String, Presence>,
+    /// Monotonic counter for stamping outgoing messages with a unique local id.
+    pub msg_seq: u64,
 }
 
 impl Default for App {
@@ -97,6 +103,7 @@ impl Default for App {
             tick: 0,
             history_loaded: std::collections::HashSet::new(),
             presence: std::collections::HashMap::new(),
+            msg_seq: 0,
         }
     }
 }
@@ -234,17 +241,14 @@ impl App {
                 };
                 // Echo locally so the sent line appears immediately; the event
                 // loop performs the actual backend send.
-                self.messages
-                    .entry(chat.clone())
-                    .or_default()
-                    .push(Message {
-                        id: String::new(),
-                        from_me: true,
-                        body: body.clone(),
-                        status: DeliveryState::Sending,
-                    });
+                self.msg_seq += 1;
+                let id = format!("local-{}", self.msg_seq);
+                let mut m = Message::outgoing(id.clone(), body.clone());
+                // Echoed immediately as Sent; receipts promote it from here.
+                m.status = DeliveryState::Sent;
+                self.messages.entry(chat.clone()).or_default().push(m);
                 self.front_chat(&chat);
-                Action::Send { chat, body }
+                Action::Send { id, chat, body }
             }
             _ => Action::None,
         }
@@ -491,13 +495,14 @@ mod tests {
         }
         assert_eq!(app.input, "yo");
         let action = app.on_key(key(KeyCode::Enter));
-        assert_eq!(
+        assert!(matches!(
             action,
             Action::Send {
-                chat: "a@s".into(),
-                body: "yo".into()
-            }
-        );
+                id: _,
+                chat,
+                body,
+            } if chat == "a@s" && body == "yo"
+        ));
         assert!(app.input.is_empty());
         // Seeded incoming "hi" plus the echoed outgoing "yo".
         let sent = app.open_messages();
@@ -505,6 +510,40 @@ mod tests {
         let last = sent.last().unwrap();
         assert!(last.from_me);
         assert_eq!(last.body, "yo");
+    }
+
+    #[test]
+    fn sent_message_gets_id_and_sent_status() {
+        let mut app = App::default();
+        app.apply_event(BackendEvent::Connected);
+        app.set_contacts(vec![Contact {
+            jid: "a@s".into(),
+            name: "A".into(),
+        }]);
+        // Seed a chat so it lands in chat_order and Enter can open it (post-#12).
+        app.apply_event(BackendEvent::Message {
+            chat: "a@s".into(),
+            msg: msg(false, "hi"),
+        });
+        app.on_key(key(KeyCode::Enter));
+        for c in "hi".chars() {
+            app.on_key(key(KeyCode::Char(c)));
+        }
+        let action = app.on_key(key(KeyCode::Enter));
+        let sent = app.open_messages();
+        let last = sent.last().unwrap();
+        assert!(last.from_me);
+        assert!(!last.id.is_empty());
+        assert_eq!(last.status, DeliveryState::Sent);
+        // The action carries the same id so the backend/receipts can match it.
+        match action {
+            Action::Send { id, chat, body } => {
+                assert_eq!(id, last.id);
+                assert_eq!(chat, "a@s");
+                assert_eq!(body, "hi");
+            }
+            other => panic!("expected Send, got {other:?}"),
+        }
     }
 
     #[test]
