@@ -317,35 +317,28 @@ func wpp_bridge_fetch_contacts() *C.char {
 		return nil
 	}
 
-	// Collapse a contact's LID and phone-number entries onto one canonical key,
-	// keeping the highest-priority name (saved FullName beats pushname) so the
-	// sidebar shows one row per person instead of two.
-	type cinfo struct {
-		name string
-		rank int
-	}
-	best := make(map[string]cinfo)
-	for jid, info := range contacts {
-		name, rank := jid.User, 0
-		switch {
-		case info.FullName != "":
-			name, rank = info.FullName, 4
-		case info.PushName != "":
-			name, rank = info.PushName, 3
-		case info.BusinessName != "":
-			name, rank = info.BusinessName, 2
-		case info.FirstName != "":
-			name, rank = info.FirstName, 1
-		}
-		key := canonicalChat(c, jid)
-		if cur, ok := best[key]; !ok || rank > cur.rank {
-			best[key] = cinfo{name: name, rank: rank}
-		}
-	}
-
+	// Emit every contact under its own JID key (both phone-number and LID
+	// entries). Name resolution must stay keyed by whatever JID a chat actually
+	// uses, so a chat that is still LID-keyed (e.g. restored from an older store)
+	// keeps its pushname instead of falling back to a raw JID. The split between
+	// a person's LID and PN identities is collapsed at the message boundary
+	// (see canonicalChat), not by dropping contact keys here.
 	var lines []string
-	for jid, ci := range best {
-		lines = append(lines, jid+"\t"+ci.name)
+	for jid, info := range contacts {
+		name := info.FullName
+		if name == "" {
+			name = info.PushName
+		}
+		if name == "" {
+			name = info.BusinessName
+		}
+		if name == "" {
+			name = info.FirstName
+		}
+		if name == "" {
+			name = jid.User
+		}
+		lines = append(lines, jid.String()+"\t"+name)
 	}
 
 	return C.CString(strings.Join(lines, "\n"))
