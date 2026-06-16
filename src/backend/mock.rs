@@ -20,10 +20,7 @@ impl Default for MockBackend {
         events.push_back(BackendEvent::Connected);
         events.push_back(BackendEvent::Message {
             chat: "5511999990000@s.whatsapp.net".to_string(),
-            msg: Message {
-                from_me: false,
-                body: "hello from the mock backend".to_string(),
-            },
+            msg: Message::incoming("hello from the mock backend"),
         });
         events.push_back(BackendEvent::Presence {
             chat: "5511999990000@s.whatsapp.net".to_string(),
@@ -54,7 +51,7 @@ impl Backend for MockBackend {
         ])
     }
 
-    async fn send(&self, _chat: &str, _body: &str) -> Result<()> {
+    async fn send(&self, _id: &str, _chat: &str, _body: &str) -> Result<()> {
         Ok(())
     }
 

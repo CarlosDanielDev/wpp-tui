@@ -40,6 +40,8 @@ var (
 	msgQueue  []string
 	presMu    sync.Mutex
 	presQueue []string
+	rcptMu    sync.Mutex
+	rcptQueue []string
 )
 
 func setError(err error) {
@@ -138,6 +140,26 @@ func wpp_bridge_init(dataDir *C.char) C.int {
 			presMu.Lock()
 			presQueue = append(presQueue, line)
 			presMu.Unlock()
+		case *events.Receipt:
+			// Delivery / read receipt for one or more of our sent messages.
+			state := ""
+			switch v.Type {
+			case types.ReceiptTypeDelivered:
+				state = "delivered"
+			case types.ReceiptTypeRead, types.ReceiptTypeReadSelf:
+				state = "read"
+			}
+			if state == "" || len(v.MessageIDs) == 0 {
+				return // playedself / other receipt types we don't surface
+			}
+			ids := make([]string, len(v.MessageIDs))
+			for i, id := range v.MessageIDs {
+				ids[i] = string(id)
+			}
+			line := v.MessageSource.Chat.String() + "\t" + state + "\t" + strings.Join(ids, ",")
+			rcptMu.Lock()
+			rcptQueue = append(rcptQueue, line)
+			rcptMu.Unlock()
 		}
 	})
 
@@ -302,7 +324,7 @@ func wpp_bridge_fetch_contacts() *C.char {
 }
 
 //export wpp_bridge_send_text
-func wpp_bridge_send_text(jidStr *C.char, body *C.char) C.int {
+func wpp_bridge_send_text(idStr *C.char, jidStr *C.char, body *C.char) C.int {
 	mu.Lock()
 	c := client
 	mu.Unlock()
@@ -319,7 +341,10 @@ func wpp_bridge_send_text(jidStr *C.char, body *C.char) C.int {
 	}
 
 	msg := &waE2E.Message{Conversation: proto.String(C.GoString(body))}
-	if _, err := c.SendMessage(context.Background(), to, msg); err != nil {
+	// Stamp the message with our local id so delivery receipts can be matched
+	// back to it on the Rust side.
+	extra := whatsmeow.SendRequestExtra{ID: types.MessageID(C.GoString(idStr))}
+	if _, err := c.SendMessage(context.Background(), to, msg, extra); err != nil {
 		setError(fmt.Errorf("send: %w", err))
 		return -3
 	}
@@ -347,6 +372,18 @@ func wpp_bridge_poll_presence() *C.char {
 	}
 	line := presQueue[0]
 	presQueue = presQueue[1:]
+	return C.CString(line)
+}
+
+//export wpp_bridge_poll_receipt
+func wpp_bridge_poll_receipt() *C.char {
+	rcptMu.Lock()
+	defer rcptMu.Unlock()
+	if len(rcptQueue) == 0 {
+		return nil
+	}
+	line := rcptQueue[0]
+	rcptQueue = rcptQueue[1:]
 	return C.CString(line)
 }
 

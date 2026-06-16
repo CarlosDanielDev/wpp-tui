@@ -12,7 +12,7 @@ use std::time::Duration;
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 
-use super::{Backend, BackendEvent, Contact, Message, Presence};
+use super::{Backend, BackendEvent, Contact, DeliveryState, Message, Presence};
 use crate::bridge;
 
 /// Directory holding the whatsmeow SQLite session store. Overridable so several
@@ -72,8 +72,10 @@ fn parse_incoming(raw: &str) -> Option<(String, Message)> {
     Some((
         jid.to_string(),
         Message {
+            id: String::new(),
             from_me: flag == "1",
             body: body.to_string(),
+            status: DeliveryState::Sent,
         },
     ))
 }
@@ -97,6 +99,28 @@ fn parse_presence(raw: &str) -> Option<(String, Presence)> {
         _ => return None,
     };
     Some((jid, presence))
+}
+
+/// Parse a receipt line: `chat\tstate\tid1,id2`, state ∈ {delivered, read}.
+/// Returns the chat, the affected message ids, and the new delivery state.
+fn parse_receipt(raw: &str) -> Option<(String, Vec<String>, DeliveryState)> {
+    let mut parts = raw.splitn(3, '\t');
+    let chat = parts.next()?.to_string();
+    let state = match parts.next()? {
+        "delivered" => DeliveryState::Delivered,
+        "read" => DeliveryState::Read,
+        _ => return None,
+    };
+    let ids: Vec<String> = parts
+        .next()?
+        .split(',')
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .collect();
+    if ids.is_empty() {
+        return None;
+    }
+    Some((chat, ids, state))
 }
 
 #[async_trait]
@@ -126,12 +150,14 @@ impl Backend for WhatsmeowBackend {
         .await?
     }
 
-    async fn send(&self, chat: &str, body: &str) -> Result<()> {
+    async fn send(&self, id: &str, chat: &str, body: &str) -> Result<()> {
+        let id = id.to_string();
         let chat = chat.to_string();
         let body = body.to_string();
         // SendMessage does network I/O on the Go side — keep it off async workers.
         tokio::task::spawn_blocking(move || {
-            bridge::send_text(&chat, &body).map_err(|code| bridge_err("wpp_bridge_send_text", code))
+            bridge::send_text(&id, &chat, &body)
+                .map_err(|code| bridge_err("wpp_bridge_send_text", code))
         })
         .await??;
         Ok(())
@@ -152,6 +178,11 @@ impl Backend for WhatsmeowBackend {
             if let Some(raw) = bridge::poll_presence() {
                 if let Some((chat, state)) = parse_presence(&raw) {
                     return Ok(BackendEvent::Presence { chat, state });
+                }
+            }
+            if let Some(raw) = bridge::poll_receipt() {
+                if let Some((chat, ids, state)) = parse_receipt(&raw) {
+                    return Ok(BackendEvent::Receipt { chat, ids, state });
                 }
             }
             if bridge::is_connected() && !self.connected_emitted.swap(true, Ordering::SeqCst) {
@@ -222,6 +253,26 @@ mod tests {
         assert!(parse_incoming("").is_none());
         assert!(parse_incoming("only_jid").is_none());
         assert!(parse_incoming("jid\t0").is_none());
+    }
+
+    #[test]
+    fn parse_receipt_decodes_state_and_ids() {
+        let (chat, ids, state) = parse_receipt("a@s\tdelivered\tm1,m2").unwrap();
+        assert_eq!(chat, "a@s");
+        assert_eq!(ids, vec!["m1".to_string(), "m2".to_string()]);
+        assert_eq!(state, DeliveryState::Delivered);
+
+        let (_, ids, state) = parse_receipt("a@s\tread\tm3").unwrap();
+        assert_eq!(ids, vec!["m3".to_string()]);
+        assert_eq!(state, DeliveryState::Read);
+    }
+
+    #[test]
+    fn parse_receipt_rejects_malformed() {
+        assert!(parse_receipt("").is_none());
+        assert!(parse_receipt("a@s\tdelivered").is_none());
+        assert!(parse_receipt("a@s\tbogus\tm1").is_none());
+        assert!(parse_receipt("a@s\tread\t").is_none());
     }
 
     #[test]

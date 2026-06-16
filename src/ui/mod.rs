@@ -236,6 +236,30 @@ mod tests {
     }
 
     #[test]
+    fn chat_shows_delivery_marker_for_sent_message() {
+        use crate::backend::DeliveryState;
+        use crossterm::event::{KeyCode, KeyEvent};
+        let mut app = App::default();
+        app.apply_event(BackendEvent::Connected);
+        app.set_contacts(vec![Contact {
+            jid: "a@s".into(),
+            name: "Alice".into(),
+        }]);
+        // Seed a chat so it is in chat_order and Enter opens it (post-#12).
+        app.apply_event(BackendEvent::Message {
+            chat: "a@s".into(),
+            msg: Message::incoming("hey"),
+        });
+        app.on_key(KeyEvent::from(KeyCode::Enter));
+        let mut m = Message::outgoing("m1", "hello");
+        m.status = DeliveryState::Read;
+        app.messages.entry("a@s".into()).or_default().push(m);
+        let out = render(&app);
+        assert!(out.contains("hello"));
+        assert!(out.contains("✔✔")); // read marker
+    }
+
+    #[test]
     fn login_screen_shows_qr() {
         let mut app = App::default();
         app.apply_event(BackendEvent::Qr("MOCK-QR-SCAN-ME".into()));
@@ -264,10 +288,7 @@ mod tests {
         // Only Alice has a conversation.
         app.apply_event(BackendEvent::Message {
             chat: "a@s".into(),
-            msg: Message {
-                from_me: false,
-                body: "hi".into(),
-            },
+            msg: Message::incoming("hi"),
         });
         let out = render(&app);
         assert!(out.contains("Alice"));
@@ -301,10 +322,7 @@ mod tests {
         app.apply_event(BackendEvent::Connected);
         app.apply_event(BackendEvent::Message {
             chat: "a@s".into(),
-            msg: Message {
-                from_me: false,
-                body: "hi".into(),
-            },
+            msg: Message::incoming("hi"),
         });
         // No chat opened → right pane is the placeholder, not a chat.
         let out = render(&app);
@@ -323,10 +341,7 @@ mod tests {
         }]);
         app.apply_event(BackendEvent::Message {
             chat: "a@s".into(),
-            msg: Message {
-                from_me: false,
-                body: "hello there".into(),
-            },
+            msg: Message::incoming("hello there"),
         });
         app.on_key(KeyEvent::from(KeyCode::Enter));
         let out = render(&app);
@@ -347,10 +362,7 @@ mod tests {
         for i in 0..60 {
             app.apply_event(BackendEvent::Message {
                 chat: "a@s".into(),
-                msg: Message {
-                    from_me: false,
-                    body: format!("line-{i}"),
-                },
+                msg: Message::incoming(format!("line-{i}")),
             });
         }
         app.on_key(KeyEvent::from(KeyCode::Enter));
@@ -384,10 +396,7 @@ mod tests {
         // Seed the chat so it lands in `chat_order`, then open it.
         app.apply_event(BackendEvent::Message {
             chat: "a@s".into(),
-            msg: Message {
-                from_me: false,
-                body: "hi".into(),
-            },
+            msg: Message::incoming("hi"),
         });
         app.on_key(KeyEvent::from(KeyCode::Enter));
         app.apply_event(BackendEvent::Presence {
