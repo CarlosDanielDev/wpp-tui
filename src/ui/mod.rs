@@ -199,7 +199,8 @@ fn draw_main(frame: &mut Frame, app: &App, area: Rect) {
 fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect) {
     let keys = match (app.screen, app.focus) {
         (Screen::Login, _) => "Quit[q]",
-        (Screen::Main, Focus::Sidebar) => "↑↓/jk:Move  Enter:Open  Tab:Input  Quit[q/Esc]",
+        (Screen::Main, Focus::Search) => "Type to filter  Enter/Tab:Next  Esc:Chats",
+        (Screen::Main, Focus::Sidebar) => "↑↓/jk:Move  Enter:Open  Tab:Search  Quit[q/Esc]",
         (Screen::Main, Focus::Input) => "Type  Enter:Send  Tab:Chats  Esc:Back",
     };
     let bar = Line::from(vec![

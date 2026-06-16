@@ -22,6 +22,7 @@ pub enum Screen {
 /// Which region of the Main screen has keyboard focus. (#29 adds `Search`.)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Focus {
+    Search,
     Sidebar,
     Input,
 }
@@ -61,6 +62,8 @@ pub struct App {
     pub chat_order: Vec<String>,
     /// Cursor into `contacts` on the contacts screen.
     pub selected: usize,
+    /// Live fuzzy-search query driving the sidebar filter (#29).
+    pub query: String,
     /// Per-chat message history, keyed by chat JID.
     pub messages: HashMap<String, Vec<Message>>,
     /// JID of the chat currently open on the chat screen.
@@ -94,6 +97,7 @@ impl Default for App {
             contacts: Vec::new(),
             chat_order: Vec::new(),
             selected: 0,
+            query: String::new(),
             messages: HashMap::new(),
             open_chat: None,
             input: String::new(),
@@ -173,6 +177,7 @@ impl App {
         match self.screen {
             Screen::Login => self.on_key_login(key),
             Screen::Main => match self.focus {
+                Focus::Search => self.on_key_search(key),
                 Focus::Sidebar => self.on_key_sidebar(key),
                 Focus::Input => self.on_key_input(key),
             },
@@ -186,11 +191,39 @@ impl App {
         }
     }
 
+    fn on_key_search(&mut self, key: KeyEvent) -> Action {
+        match key.code {
+            KeyCode::Tab => {
+                self.focus = Focus::Input;
+                Action::None
+            }
+            KeyCode::Esc => {
+                self.focus = Focus::Sidebar;
+                Action::None
+            }
+            KeyCode::Backspace => {
+                self.query.pop();
+                self.selected = 0;
+                Action::None
+            }
+            KeyCode::Char(c) => {
+                self.query.push(c);
+                self.selected = 0;
+                Action::None
+            }
+            KeyCode::Enter => {
+                self.focus = Focus::Sidebar;
+                Action::None
+            } // hand off to sidebar to open
+            _ => Action::None,
+        }
+    }
+
     fn on_key_sidebar(&mut self, key: KeyEvent) -> Action {
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc => Action::Quit,
             KeyCode::Tab => {
-                self.focus = Focus::Input;
+                self.focus = Focus::Search;
                 Action::None
             }
             KeyCode::Char('r') | KeyCode::F(5) => Action::Refresh,
@@ -600,10 +633,42 @@ mod tests {
     }
 
     #[test]
-    fn tab_cycles_sidebar_and_input() {
+    fn tab_cycle_includes_search() {
         let mut app = App::default();
         app.apply_event(BackendEvent::Connected);
         assert_eq!(app.focus, Focus::Sidebar);
+        app.on_key(key(KeyCode::Tab));
+        assert_eq!(app.focus, Focus::Search);
+        app.on_key(key(KeyCode::Tab));
+        assert_eq!(app.focus, Focus::Input);
+        app.on_key(key(KeyCode::Tab));
+        assert_eq!(app.focus, Focus::Sidebar);
+    }
+
+    #[test]
+    fn typing_in_search_edits_query_and_resets_selection() {
+        let mut app = App::default();
+        app.apply_event(BackendEvent::Connected);
+        app.focus = Focus::Search;
+        app.selected = 3;
+        for c in "ali".chars() {
+            app.on_key(key(KeyCode::Char(c)));
+        }
+        assert_eq!(app.query, "ali");
+        assert_eq!(app.selected, 0);
+        app.on_key(key(KeyCode::Backspace));
+        assert_eq!(app.query, "al");
+        app.on_key(key(KeyCode::Esc));
+        assert_eq!(app.focus, Focus::Sidebar);
+    }
+
+    #[test]
+    fn tab_cycles_sidebar_search_and_input() {
+        let mut app = App::default();
+        app.apply_event(BackendEvent::Connected);
+        assert_eq!(app.focus, Focus::Sidebar);
+        app.on_key(key(KeyCode::Tab));
+        assert_eq!(app.focus, Focus::Search);
         app.on_key(key(KeyCode::Tab));
         assert_eq!(app.focus, Focus::Input);
         app.on_key(key(KeyCode::Tab));
