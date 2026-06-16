@@ -10,6 +10,23 @@ use std::collections::HashMap;
 use crossterm::event::{KeyCode, KeyEvent};
 
 use crate::backend::{BackendEvent, Contact, DeliveryState, Message, Presence};
+use crate::fuzzy::fuzzy_score;
+
+/// Whether a sidebar row is an existing chat or a contact offered to start one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    Chat,
+    Contact,
+}
+
+/// One rendered sidebar row.
+#[derive(Debug, Clone)]
+pub struct Row {
+    pub jid: String,
+    pub name: String,
+    pub unread: usize,
+    pub kind: Kind,
+}
 
 /// Top-level screen. Login is the QR pairing screen; Main is the persistent
 /// two-pane layout shown after connecting.
@@ -22,6 +39,7 @@ pub enum Screen {
 /// Which region of the Main screen has keyboard focus. (#29 adds `Search`.)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Focus {
+    Search,
     Sidebar,
     Input,
 }
@@ -61,6 +79,8 @@ pub struct App {
     pub chat_order: Vec<String>,
     /// Cursor into `contacts` on the contacts screen.
     pub selected: usize,
+    /// Live fuzzy-search query driving the sidebar filter (#29).
+    pub query: String,
     /// Per-chat message history, keyed by chat JID.
     pub messages: HashMap<String, Vec<Message>>,
     /// JID of the chat currently open on the chat screen.
@@ -94,6 +114,7 @@ impl Default for App {
             contacts: Vec::new(),
             chat_order: Vec::new(),
             selected: 0,
+            query: String::new(),
             messages: HashMap::new(),
             open_chat: None,
             input: String::new(),
@@ -125,6 +146,75 @@ impl App {
             self.chat_order.remove(pos);
         }
         self.chat_order.insert(0, chat.to_string());
+    }
+
+    /// Public seeder for `front_chat`, used at startup to restore the sidebar
+    /// from the persisted store.
+    pub fn front_chat_pub(&mut self, jid: &str) {
+        self.front_chat(jid);
+    }
+
+    fn display_name(&self, jid: &str) -> String {
+        self.contacts
+            .iter()
+            .find(|c| c.jid == jid)
+            .map(|c| c.name.clone())
+            .unwrap_or_else(|| jid.to_string())
+    }
+
+    /// The sidebar rows for the current query: chats first; if none match, fall
+    /// back to fuzzy-matched contacts.
+    pub fn visible_sidebar(&self) -> Vec<Row> {
+        let q = self.query.trim();
+        // Chat rows (fuzzy-filtered when there's a query), preserving chat_order
+        // on empty query and sorting by score otherwise.
+        let mut chats: Vec<(i32, Row)> = self
+            .chat_order
+            .iter()
+            .filter_map(|jid| {
+                let name = self.display_name(jid);
+                let score = if q.is_empty() {
+                    Some(0)
+                } else {
+                    fuzzy_score(q, &name).or_else(|| fuzzy_score(q, jid))
+                }?;
+                Some((
+                    score,
+                    Row {
+                        jid: jid.clone(),
+                        name,
+                        unread: self.unread.get(jid).copied().unwrap_or(0),
+                        kind: Kind::Chat,
+                    },
+                ))
+            })
+            .collect();
+        if !q.is_empty() {
+            // Stable: higher score first, original order on ties.
+            chats.sort_by_key(|r| std::cmp::Reverse(r.0));
+        }
+        if !chats.is_empty() || q.is_empty() {
+            return chats.into_iter().map(|(_, r)| r).collect();
+        }
+        // Zero chat matches and a non-empty query → contact fallback.
+        let mut contacts: Vec<(i32, Row)> = self
+            .contacts
+            .iter()
+            .filter_map(|c| {
+                let score = fuzzy_score(q, &c.name).or_else(|| fuzzy_score(q, &c.jid))?;
+                Some((
+                    score,
+                    Row {
+                        jid: c.jid.clone(),
+                        name: c.name.clone(),
+                        unread: 0,
+                        kind: Kind::Contact,
+                    },
+                ))
+            })
+            .collect();
+        contacts.sort_by_key(|r| std::cmp::Reverse(r.0));
+        contacts.into_iter().map(|(_, r)| r).collect()
     }
 
     /// Fold a backend event into state. Pure: no I/O, no redraw.
@@ -173,6 +263,7 @@ impl App {
         match self.screen {
             Screen::Login => self.on_key_login(key),
             Screen::Main => match self.focus {
+                Focus::Search => self.on_key_search(key),
                 Focus::Sidebar => self.on_key_sidebar(key),
                 Focus::Input => self.on_key_input(key),
             },
@@ -186,11 +277,39 @@ impl App {
         }
     }
 
+    fn on_key_search(&mut self, key: KeyEvent) -> Action {
+        match key.code {
+            KeyCode::Tab => {
+                self.focus = Focus::Input;
+                Action::None
+            }
+            KeyCode::Esc => {
+                self.focus = Focus::Sidebar;
+                Action::None
+            }
+            KeyCode::Backspace => {
+                self.query.pop();
+                self.selected = 0;
+                Action::None
+            }
+            KeyCode::Char(c) => {
+                self.query.push(c);
+                self.selected = 0;
+                Action::None
+            }
+            KeyCode::Enter => {
+                self.focus = Focus::Sidebar;
+                Action::None
+            } // hand off to sidebar to open
+            _ => Action::None,
+        }
+    }
+
     fn on_key_sidebar(&mut self, key: KeyEvent) -> Action {
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc => Action::Quit,
             KeyCode::Tab => {
-                self.focus = Focus::Input;
+                self.focus = Focus::Search;
                 Action::None
             }
             KeyCode::Char('r') | KeyCode::F(5) => Action::Refresh,
@@ -201,17 +320,21 @@ impl App {
                 Action::None
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                if self.selected + 1 < self.chat_order.len() {
+                if self.selected + 1 < self.visible_sidebar().len() {
                     self.selected += 1;
                 }
                 Action::None
             }
             KeyCode::Enter => {
-                if let Some(jid) = self.chat_order.get(self.selected).cloned() {
+                let rows = self.visible_sidebar();
+                if let Some(row) = rows.get(self.selected) {
+                    let jid = row.jid.clone();
                     self.unread.remove(&jid);
                     self.open_chat = Some(jid.clone());
                     self.focus = Focus::Input;
                     self.input.clear();
+                    self.query.clear();
+                    self.selected = 0;
                     return Action::OpenChat { chat: jid };
                 }
                 Action::None
@@ -600,10 +723,133 @@ mod tests {
     }
 
     #[test]
-    fn tab_cycles_sidebar_and_input() {
+    fn enter_on_contact_result_starts_blank_chat() {
+        let mut app = App::default();
+        app.apply_event(BackendEvent::Connected);
+        app.set_contacts(vec![Contact {
+            jid: "z@s".into(),
+            name: "Zara".into(),
+        }]);
+        app.query = "zar".into(); // fallback → Zara contact row
+        app.focus = Focus::Sidebar;
+        app.selected = 0;
+        let action = app.on_key(key(KeyCode::Enter));
+        assert_eq!(app.open_chat.as_deref(), Some("z@s"));
+        assert_eq!(app.focus, Focus::Input);
+        assert_eq!(action, Action::OpenChat { chat: "z@s".into() });
+        // Opening clears the query so the sidebar returns to the chat list.
+        assert!(app.query.is_empty());
+        // Blank pane — no messages yet.
+        assert!(app.open_messages().is_empty());
+    }
+
+    #[test]
+    fn visible_sidebar_empty_query_lists_all_chats() {
+        let mut app = App::default();
+        app.apply_event(BackendEvent::Message {
+            chat: "a@s".into(),
+            msg: msg(false, "1"),
+        });
+        app.apply_event(BackendEvent::Message {
+            chat: "b@s".into(),
+            msg: msg(false, "2"),
+        });
+        let rows = app.visible_sidebar();
+        assert_eq!(rows.len(), 2);
+        assert!(rows.iter().all(|r| r.kind == Kind::Chat));
+    }
+
+    #[test]
+    fn visible_sidebar_filters_chats_by_query() {
+        let mut app = App::default();
+        app.set_contacts(vec![
+            Contact {
+                jid: "a@s".into(),
+                name: "Alice".into(),
+            },
+            Contact {
+                jid: "b@s".into(),
+                name: "Bob".into(),
+            },
+        ]);
+        app.apply_event(BackendEvent::Message {
+            chat: "a@s".into(),
+            msg: msg(false, "1"),
+        });
+        app.apply_event(BackendEvent::Message {
+            chat: "b@s".into(),
+            msg: msg(false, "2"),
+        });
+        app.query = "ali".into();
+        let rows = app.visible_sidebar();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].name, "Alice");
+        assert_eq!(rows[0].kind, Kind::Chat);
+    }
+
+    #[test]
+    fn visible_sidebar_falls_back_to_contacts_when_no_chat_matches() {
+        let mut app = App::default();
+        app.set_contacts(vec![
+            Contact {
+                jid: "a@s".into(),
+                name: "Alice".into(),
+            },
+            Contact {
+                jid: "z@s".into(),
+                name: "Zara".into(),
+            },
+        ]);
+        // Only Alice has a chat; query matches Zara (a contact, no chat).
+        app.apply_event(BackendEvent::Message {
+            chat: "a@s".into(),
+            msg: msg(false, "1"),
+        });
+        app.query = "zar".into();
+        let rows = app.visible_sidebar();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].name, "Zara");
+        assert_eq!(rows[0].kind, Kind::Contact);
+        assert_eq!(rows[0].jid, "z@s");
+    }
+
+    #[test]
+    fn tab_cycle_includes_search() {
         let mut app = App::default();
         app.apply_event(BackendEvent::Connected);
         assert_eq!(app.focus, Focus::Sidebar);
+        app.on_key(key(KeyCode::Tab));
+        assert_eq!(app.focus, Focus::Search);
+        app.on_key(key(KeyCode::Tab));
+        assert_eq!(app.focus, Focus::Input);
+        app.on_key(key(KeyCode::Tab));
+        assert_eq!(app.focus, Focus::Sidebar);
+    }
+
+    #[test]
+    fn typing_in_search_edits_query_and_resets_selection() {
+        let mut app = App::default();
+        app.apply_event(BackendEvent::Connected);
+        app.focus = Focus::Search;
+        app.selected = 3;
+        for c in "ali".chars() {
+            app.on_key(key(KeyCode::Char(c)));
+        }
+        assert_eq!(app.query, "ali");
+        assert_eq!(app.selected, 0);
+        app.on_key(key(KeyCode::Backspace));
+        assert_eq!(app.query, "al");
+        app.on_key(key(KeyCode::Esc));
+        assert_eq!(app.focus, Focus::Sidebar);
+    }
+
+    #[test]
+    fn tab_cycles_sidebar_search_and_input() {
+        let mut app = App::default();
+        app.apply_event(BackendEvent::Connected);
+        assert_eq!(app.focus, Focus::Sidebar);
+        app.on_key(key(KeyCode::Tab));
+        assert_eq!(app.focus, Focus::Search);
         app.on_key(key(KeyCode::Tab));
         assert_eq!(app.focus, Focus::Input);
         app.on_key(key(KeyCode::Tab));

@@ -2,6 +2,7 @@ mod app;
 mod backend;
 #[cfg(feature = "whatsmeow")]
 mod bridge;
+mod fuzzy;
 mod qr;
 mod store;
 mod tui;
@@ -85,6 +86,15 @@ async fn run(terminal: &mut Term, app: &mut App, backend: Arc<dyn Backend>) -> R
 
     let data_dir = std::env::var("WPP_DATA_DIR").unwrap_or_else(|_| "wpp-data".to_string());
     let store = store::FileStore::new(&data_dir);
+
+    // Seed the sidebar from persisted chats so conversations survive a restart.
+    // Reverse so the index order is preserved with most-recent first after
+    // fronting each JID.
+    if let Ok(chats) = store.list_chats() {
+        for jid in chats.into_iter().rev() {
+            app.front_chat_pub(&jid);
+        }
+    }
 
     // Producer: drain backend events forever.
     let event_backend = Arc::clone(&backend);
