@@ -105,8 +105,14 @@ impl Backend for WhatsmeowBackend {
         .await?
     }
 
-    async fn send(&self, _chat: &str, _body: &str) -> Result<()> {
-        // Outbound messaging lands with issue #11.
+    async fn send(&self, chat: &str, body: &str) -> Result<()> {
+        let chat = chat.to_string();
+        let body = body.to_string();
+        // SendMessage does network I/O on the Go side — keep it off async workers.
+        tokio::task::spawn_blocking(move || {
+            bridge::send_text(&chat, &body).map_err(|code| bridge_err("wpp_bridge_send_text", code))
+        })
+        .await??;
         Ok(())
     }
 
@@ -116,6 +122,11 @@ impl Backend for WhatsmeowBackend {
         loop {
             if let Some(code) = bridge::poll_qr() {
                 return Ok(BackendEvent::Qr(code));
+            }
+            if let Some(raw) = bridge::poll_message() {
+                if let Some((chat, msg)) = parse_incoming(&raw) {
+                    return Ok(BackendEvent::Message { chat, msg });
+                }
             }
             if bridge::is_connected() && !self.connected_emitted.swap(true, Ordering::SeqCst) {
                 return Ok(BackendEvent::Connected);
