@@ -11,6 +11,9 @@ pub struct Contact {
 
 /// Delivery state of an outgoing message. Ordered so a receipt never regresses
 /// the status (see `rank`).
+// `Delivered` is only constructed by the whatsmeow FFI receipt path; the default
+// build would otherwise flag it as never-constructed.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeliveryState {
     Sending,
@@ -92,6 +95,9 @@ pub enum BackendEvent {
     /// A presence update for a chat.
     Presence { chat: String, state: Presence },
     /// Delivery receipt(s) advancing message status for a chat.
+    // Only constructed by the whatsmeow FFI receipt poll; the default build would
+    // otherwise flag it (and its fold arm) as never-constructed.
+    #[allow(dead_code)]
     Receipt {
         chat: String,
         ids: Vec<String>,
@@ -108,9 +114,10 @@ pub trait Backend: Send + Sync {
     /// Fetch the contact / recent-chat list. Consumed in the P3 contacts phase.
     #[allow(dead_code)]
     async fn contacts(&self) -> Result<Vec<Contact>>;
-    /// Send a text message to a chat. Consumed in the P4 chat phase.
+    /// Send a text message to a chat, stamped with local `id` (also used as the
+    /// WhatsApp message id so receipts can be matched back). P4 chat phase.
     #[allow(dead_code)]
-    async fn send(&self, chat: &str, body: &str) -> Result<()>;
+    async fn send(&self, id: &str, chat: &str, body: &str) -> Result<()>;
     /// Await the next backend event (long-poll).
     async fn next_event(&self) -> Result<BackendEvent>;
 }

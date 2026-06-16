@@ -51,7 +51,7 @@ impl Backend for MockBackend {
         ])
     }
 
-    async fn send(&self, _chat: &str, _body: &str) -> Result<()> {
+    async fn send(&self, _id: &str, _chat: &str, _body: &str) -> Result<()> {
         Ok(())
     }
 
