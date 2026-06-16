@@ -38,6 +38,8 @@ var (
 	cancelFn  context.CancelFunc
 	msgMu     sync.Mutex
 	msgQueue  []string
+	presMu    sync.Mutex
+	presQueue []string
 )
 
 func setError(err error) {
@@ -111,6 +113,31 @@ func wpp_bridge_init(dataDir *C.char) C.int {
 			msgMu.Lock()
 			msgQueue = append(msgQueue, line)
 			msgMu.Unlock()
+		case *events.ChatPresence:
+			// Typing notification. "composing" → typing; "paused" → online.
+			state := "online"
+			if v.State == types.ChatPresenceComposing {
+				state = "typing"
+			}
+			line := v.MessageSource.Chat.String() + "\t" + state + "\t"
+			presMu.Lock()
+			presQueue = append(presQueue, line)
+			presMu.Unlock()
+		case *events.Presence:
+			// Online / offline (with optional last-seen) for a subscribed user.
+			var line string
+			if v.Unavailable {
+				lastSeen := ""
+				if !v.LastSeen.IsZero() {
+					lastSeen = v.LastSeen.Local().Format("2006-01-02 15:04")
+				}
+				line = v.From.String() + "\toffline\t" + lastSeen
+			} else {
+				line = v.From.String() + "\tonline\t"
+			}
+			presMu.Lock()
+			presQueue = append(presQueue, line)
+			presMu.Unlock()
 		}
 	})
 
@@ -309,6 +336,42 @@ func wpp_bridge_poll_message() *C.char {
 	line := msgQueue[0]
 	msgQueue = msgQueue[1:]
 	return C.CString(line)
+}
+
+//export wpp_bridge_poll_presence
+func wpp_bridge_poll_presence() *C.char {
+	presMu.Lock()
+	defer presMu.Unlock()
+	if len(presQueue) == 0 {
+		return nil
+	}
+	line := presQueue[0]
+	presQueue = presQueue[1:]
+	return C.CString(line)
+}
+
+//export wpp_bridge_subscribe_presence
+func wpp_bridge_subscribe_presence(jidStr *C.char) C.int {
+	mu.Lock()
+	c := client
+	mu.Unlock()
+
+	if c == nil {
+		setError(fmt.Errorf("subscribe_presence: bridge not initialized"))
+		return -1
+	}
+
+	jid, err := types.ParseJID(C.GoString(jidStr))
+	if err != nil {
+		setError(fmt.Errorf("subscribe_presence: parse jid: %w", err))
+		return -2
+	}
+
+	if err := c.SubscribePresence(context.Background(), jid); err != nil {
+		setError(fmt.Errorf("subscribe_presence: %w", err))
+		return -3
+	}
+	return 0
 }
 
 func main() {}
