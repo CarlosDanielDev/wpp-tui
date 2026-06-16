@@ -267,9 +267,9 @@ fn draw_empty_pane(frame: &mut Frame, area: Rect) {
 
 fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect) {
     let keys = match (app.screen, app.focus) {
-        (Screen::Login, _) => "F:Quit[q]",
-        (Screen::Main, Focus::Sidebar) => "↑↓/jk:Move  Enter:Open  r:Refresh  Quit[q]",
-        (Screen::Main, Focus::Input) => "Type:Compose  Enter:Send  Esc:Back",
+        (Screen::Login, _) => "Quit[q]",
+        (Screen::Main, Focus::Sidebar) => "↑↓/jk:Move  Enter:Open  Tab:Input  Quit[q/Esc]",
+        (Screen::Main, Focus::Input) => "Type  Enter:Send  Tab:Chats  Esc:Back",
     };
     let bar = Line::from(vec![
         Span::styled(

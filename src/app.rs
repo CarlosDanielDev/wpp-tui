@@ -167,6 +167,10 @@ impl App {
     fn on_key_sidebar(&mut self, key: KeyEvent) -> Action {
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc => Action::Quit,
+            KeyCode::Tab => {
+                self.focus = Focus::Input;
+                Action::None
+            }
             KeyCode::Char('r') | KeyCode::F(5) => Action::Refresh,
             KeyCode::Up | KeyCode::Char('k') => {
                 if self.selected > 0 {
@@ -199,6 +203,10 @@ impl App {
             KeyCode::Esc => {
                 self.focus = Focus::Sidebar;
                 self.input.clear();
+                Action::None
+            }
+            KeyCode::Tab => {
+                self.focus = Focus::Sidebar;
                 Action::None
             }
             KeyCode::Backspace => {
@@ -494,6 +502,24 @@ mod tests {
         assert_eq!(app.on_key(key(KeyCode::Enter)), Action::None);
         // Only the seeded incoming message exists; the empty send added nothing.
         assert_eq!(app.open_messages().len(), 1);
+    }
+
+    #[test]
+    fn tab_cycles_sidebar_and_input() {
+        let mut app = App::default();
+        app.apply_event(BackendEvent::Connected);
+        assert_eq!(app.focus, Focus::Sidebar);
+        app.on_key(key(KeyCode::Tab));
+        assert_eq!(app.focus, Focus::Input);
+        app.on_key(key(KeyCode::Tab));
+        assert_eq!(app.focus, Focus::Sidebar);
+    }
+
+    #[test]
+    fn esc_from_sidebar_quits() {
+        let mut app = App::default();
+        app.apply_event(BackendEvent::Connected);
+        assert_eq!(app.on_key(key(KeyCode::Esc)), Action::Quit);
     }
 
     #[test]
