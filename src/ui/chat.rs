@@ -53,6 +53,14 @@ pub(super) fn draw_chat_pane(frame: &mut Frame, app: &App, area: Rect) {
                 Line::from(vec![
                     Span::styled("→ ", Style::default().fg(AMBER)),
                     Span::styled(m.body.clone(), Style::default().fg(GREEN)),
+                    Span::styled(
+                        format!(" {}", delivery_marker(m.status)),
+                        Style::default().fg(if m.status == DeliveryState::Read {
+                            AMBER
+                        } else {
+                            GREEN_DIM
+                        }),
+                    ),
                 ])
             } else {
                 Line::from(vec![

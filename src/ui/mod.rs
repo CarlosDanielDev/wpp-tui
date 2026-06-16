@@ -236,6 +236,30 @@ mod tests {
     }
 
     #[test]
+    fn chat_shows_delivery_marker_for_sent_message() {
+        use crate::backend::DeliveryState;
+        use crossterm::event::{KeyCode, KeyEvent};
+        let mut app = App::default();
+        app.apply_event(BackendEvent::Connected);
+        app.set_contacts(vec![Contact {
+            jid: "a@s".into(),
+            name: "Alice".into(),
+        }]);
+        // Seed a chat so it is in chat_order and Enter opens it (post-#12).
+        app.apply_event(BackendEvent::Message {
+            chat: "a@s".into(),
+            msg: Message::incoming("hey"),
+        });
+        app.on_key(KeyEvent::from(KeyCode::Enter));
+        let mut m = Message::outgoing("m1", "hello");
+        m.status = DeliveryState::Read;
+        app.messages.entry("a@s".into()).or_default().push(m);
+        let out = render(&app);
+        assert!(out.contains("hello"));
+        assert!(out.contains("✔✔")); // read marker
+    }
+
+    #[test]
     fn login_screen_shows_qr() {
         let mut app = App::default();
         app.apply_event(BackendEvent::Qr("MOCK-QR-SCAN-ME".into()));
