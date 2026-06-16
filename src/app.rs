@@ -314,17 +314,21 @@ impl App {
                 Action::None
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                if self.selected + 1 < self.chat_order.len() {
+                if self.selected + 1 < self.visible_sidebar().len() {
                     self.selected += 1;
                 }
                 Action::None
             }
             KeyCode::Enter => {
-                if let Some(jid) = self.chat_order.get(self.selected).cloned() {
+                let rows = self.visible_sidebar();
+                if let Some(row) = rows.get(self.selected) {
+                    let jid = row.jid.clone();
                     self.unread.remove(&jid);
                     self.open_chat = Some(jid.clone());
                     self.focus = Focus::Input;
                     self.input.clear();
+                    self.query.clear();
+                    self.selected = 0;
                     return Action::OpenChat { chat: jid };
                 }
                 Action::None
@@ -710,6 +714,27 @@ mod tests {
         assert_eq!(app.on_key(key(KeyCode::Enter)), Action::None);
         // Only the seeded incoming message exists; the empty send added nothing.
         assert_eq!(app.open_messages().len(), 1);
+    }
+
+    #[test]
+    fn enter_on_contact_result_starts_blank_chat() {
+        let mut app = App::default();
+        app.apply_event(BackendEvent::Connected);
+        app.set_contacts(vec![Contact {
+            jid: "z@s".into(),
+            name: "Zara".into(),
+        }]);
+        app.query = "zar".into(); // fallback → Zara contact row
+        app.focus = Focus::Sidebar;
+        app.selected = 0;
+        let action = app.on_key(key(KeyCode::Enter));
+        assert_eq!(app.open_chat.as_deref(), Some("z@s"));
+        assert_eq!(app.focus, Focus::Input);
+        assert_eq!(action, Action::OpenChat { chat: "z@s".into() });
+        // Opening clears the query so the sidebar returns to the chat list.
+        assert!(app.query.is_empty());
+        // Blank pane — no messages yet.
+        assert!(app.open_messages().is_empty());
     }
 
     #[test]
