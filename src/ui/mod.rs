@@ -264,10 +264,7 @@ mod tests {
         // Only Alice has a conversation.
         app.apply_event(BackendEvent::Message {
             chat: "a@s".into(),
-            msg: Message {
-                from_me: false,
-                body: "hi".into(),
-            },
+            msg: Message::incoming("hi"),
         });
         let out = render(&app);
         assert!(out.contains("Alice"));
@@ -301,10 +298,7 @@ mod tests {
         app.apply_event(BackendEvent::Connected);
         app.apply_event(BackendEvent::Message {
             chat: "a@s".into(),
-            msg: Message {
-                from_me: false,
-                body: "hi".into(),
-            },
+            msg: Message::incoming("hi"),
         });
         // No chat opened → right pane is the placeholder, not a chat.
         let out = render(&app);
@@ -323,10 +317,7 @@ mod tests {
         }]);
         app.apply_event(BackendEvent::Message {
             chat: "a@s".into(),
-            msg: Message {
-                from_me: false,
-                body: "hello there".into(),
-            },
+            msg: Message::incoming("hello there"),
         });
         app.on_key(KeyEvent::from(KeyCode::Enter));
         let out = render(&app);
@@ -347,10 +338,7 @@ mod tests {
         for i in 0..60 {
             app.apply_event(BackendEvent::Message {
                 chat: "a@s".into(),
-                msg: Message {
-                    from_me: false,
-                    body: format!("line-{i}"),
-                },
+                msg: Message::incoming(format!("line-{i}")),
             });
         }
         app.on_key(KeyEvent::from(KeyCode::Enter));
@@ -384,10 +372,7 @@ mod tests {
         // Seed the chat so it lands in `chat_order`, then open it.
         app.apply_event(BackendEvent::Message {
             chat: "a@s".into(),
-            msg: Message {
-                from_me: false,
-                body: "hi".into(),
-            },
+            msg: Message::incoming("hi"),
         });
         app.on_key(KeyEvent::from(KeyCode::Enter));
         app.apply_event(BackendEvent::Presence {

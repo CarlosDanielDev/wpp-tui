@@ -12,7 +12,7 @@ use std::time::Duration;
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 
-use super::{Backend, BackendEvent, Contact, Message, Presence};
+use super::{Backend, BackendEvent, Contact, DeliveryState, Message, Presence};
 use crate::bridge;
 
 /// Directory holding the whatsmeow SQLite session store. Overridable so several
@@ -72,8 +72,10 @@ fn parse_incoming(raw: &str) -> Option<(String, Message)> {
     Some((
         jid.to_string(),
         Message {
+            id: String::new(),
             from_me: flag == "1",
             body: body.to_string(),
+            status: DeliveryState::Sent,
         },
     ))
 }

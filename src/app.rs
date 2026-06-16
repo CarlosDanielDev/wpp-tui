@@ -9,7 +9,7 @@ use std::collections::HashMap;
 
 use crossterm::event::{KeyCode, KeyEvent};
 
-use crate::backend::{BackendEvent, Contact, Message, Presence};
+use crate::backend::{BackendEvent, Contact, DeliveryState, Message, Presence};
 
 /// Top-level screen. Login is the QR pairing screen; Main is the persistent
 /// two-pane layout shown after connecting.
@@ -238,8 +238,10 @@ impl App {
                     .entry(chat.clone())
                     .or_default()
                     .push(Message {
+                        id: String::new(),
                         from_me: true,
                         body: body.clone(),
+                        status: DeliveryState::Sending,
                     });
                 self.front_chat(&chat);
                 Action::Send { chat, body }
@@ -303,8 +305,10 @@ mod tests {
 
     fn msg(from_me: bool, body: &str) -> Message {
         Message {
+            id: String::new(),
             from_me,
             body: body.to_string(),
+            status: DeliveryState::Sent,
         }
     }
 

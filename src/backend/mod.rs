@@ -9,11 +9,60 @@ pub struct Contact {
     pub name: String,
 }
 
+/// Delivery state of an outgoing message. Ordered so a receipt never regresses
+/// the status (see `rank`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeliveryState {
+    Sending,
+    Sent,
+    Delivered,
+    Read,
+}
+
+impl DeliveryState {
+    /// Monotonic rank — higher is further along. Used to guard against
+    /// out-of-order receipts moving a message backwards.
+    pub fn rank(self) -> u8 {
+        match self {
+            DeliveryState::Sending => 0,
+            DeliveryState::Sent => 1,
+            DeliveryState::Delivered => 2,
+            DeliveryState::Read => 3,
+        }
+    }
+}
+
 /// A text message in a conversation.
 #[derive(Debug, Clone)]
 pub struct Message {
+    /// Server / local message id. Empty for incoming messages without one.
+    pub id: String,
     pub from_me: bool,
     pub body: String,
+    /// Delivery state. Only meaningful for `from_me` messages.
+    pub status: DeliveryState,
+}
+
+impl Message {
+    /// An incoming message (no id needed, state irrelevant).
+    pub fn incoming(body: impl Into<String>) -> Self {
+        Self {
+            id: String::new(),
+            from_me: false,
+            body: body.into(),
+            status: DeliveryState::Sent,
+        }
+    }
+
+    /// An outgoing message starting in `Sending`.
+    pub fn outgoing(id: impl Into<String>, body: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            from_me: true,
+            body: body.into(),
+            status: DeliveryState::Sending,
+        }
+    }
 }
 
 /// A contact's presence in a chat.

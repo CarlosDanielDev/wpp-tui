@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-use crate::backend::Message;
+use crate::backend::{DeliveryState, Message};
 
 /// File-backed per-chat message store. Each chat JID maps to one file under
 /// `root/chats/`; the JID is sanitised so it is a safe filename.
@@ -85,8 +85,10 @@ impl FileStore {
             .filter_map(|line| {
                 let (flag, body) = line.split_once('\t')?;
                 Some(Message {
+                    id: String::new(),
                     from_me: flag == "1",
                     body: unescape(body),
+                    status: DeliveryState::Sent,
                 })
             })
             .collect())
@@ -96,12 +98,14 @@ impl FileStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::backend::Message;
+    use crate::backend::{DeliveryState, Message};
 
     fn msg(from_me: bool, body: &str) -> Message {
         Message {
+            id: String::new(),
             from_me,
             body: body.to_string(),
+            status: DeliveryState::Sent,
         }
     }
 
