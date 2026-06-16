@@ -23,6 +23,8 @@ extern "C" {
     fn wpp_bridge_disconnect();
     fn wpp_bridge_free_string(s: *mut c_char);
     fn wpp_bridge_fetch_contacts() -> *mut c_char;
+    fn wpp_bridge_send_text(jid: *const c_char, body: *const c_char) -> c_int;
+    fn wpp_bridge_poll_message() -> *mut c_char;
 }
 
 /// Copy a Go-owned C string into an owned `String` and free the Go allocation.
@@ -113,6 +115,27 @@ pub fn disconnect() {
 pub fn fetch_contacts() -> Option<String> {
     // SAFETY: the returned pointer is null or a Go-allocated C string we own.
     unsafe { take_string(wpp_bridge_fetch_contacts()) }
+}
+
+/// Send `body` as a text message to `jid`. `Err(code)` carries the Go status
+/// code; pair with [`last_error`] for a message.
+pub fn send_text(jid: &str, body: &str) -> Result<(), i32> {
+    let c_jid = CString::new(jid).map_err(|_| -100)?;
+    let c_body = CString::new(body).map_err(|_| -100)?;
+    // SAFETY: both strings are valid NUL-terminated and outlive the call.
+    let code = unsafe { wpp_bridge_send_text(c_jid.as_ptr(), c_body.as_ptr()) };
+    if code == 0 {
+        Ok(())
+    } else {
+        Err(code)
+    }
+}
+
+/// Poll for the next queued incoming message line (`jid\tflag\tbody`), if any.
+/// `None` when the queue is empty.
+pub fn poll_message() -> Option<String> {
+    // SAFETY: the returned pointer is null or a Go-allocated C string we own.
+    unsafe { take_string(wpp_bridge_poll_message()) }
 }
 
 #[cfg(test)]
