@@ -90,6 +90,11 @@ pub enum BackendEvent {
     Qr(String),
     /// Pairing / login succeeded.
     Connected,
+    /// Connection dropped; show the reconnect overlay. Only emitted by the
+    /// whatsmeow FFI backend; the mock never disconnects, so the default build
+    /// would otherwise flag it as never-constructed.
+    #[allow(dead_code)]
+    Disconnected,
     /// Incoming message for a chat.
     Message { chat: String, msg: Message },
     /// A presence update for a chat.

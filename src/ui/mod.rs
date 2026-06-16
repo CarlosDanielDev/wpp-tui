@@ -35,6 +35,37 @@ pub fn draw(frame: &mut Frame, app: &App) {
         Screen::Main => draw_main(frame, app, chunks[0]),
     }
     draw_status_bar(frame, app, chunks[1]);
+
+    if let Some(text) = &app.overlay {
+        draw_overlay(frame, app, text);
+    }
+}
+
+/// A centred modal box floated over the current screen (e.g. disconnect status).
+fn draw_overlay(frame: &mut Frame, app: &App, text: &str) {
+    let t = &app.theme;
+    let area = frame.area();
+    let w = (text.chars().count() as u16 + 6).min(area.width);
+    let h = 5u16.min(area.height);
+    let x = area.x + (area.width.saturating_sub(w)) / 2;
+    let y = area.y + (area.height.saturating_sub(h)) / 2;
+    let rect = Rect {
+        x,
+        y,
+        width: w,
+        height: h,
+    };
+    frame.render_widget(ratatui::widgets::Clear, rect);
+    let block = dos_block(" ! ", t);
+    let inner = block.inner(rect);
+    frame.render_widget(block, rect);
+    let para = Paragraph::new(Line::from(Span::styled(
+        text.to_string(),
+        Style::default().fg(t.accent),
+    )))
+    .alignment(Alignment::Center)
+    .style(Style::default().bg(t.bg));
+    frame.render_widget(para, inner);
 }
 
 fn dos_block<'a>(title: &'a str, t: &Theme) -> Block<'a> {
@@ -433,6 +464,16 @@ mod tests {
         }]);
         let out = render(&app);
         assert!(out.contains("jk:Move"));
+    }
+
+    #[test]
+    fn overlay_modal_is_drawn_over_any_screen() {
+        let mut app = App::default();
+        app.apply_event(BackendEvent::Connected);
+        app.apply_event(BackendEvent::Disconnected);
+        let out = render(&app);
+        assert!(out.contains("Disconnected"));
+        assert!(out.contains("reconnecting"));
     }
 
     #[test]
