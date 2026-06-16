@@ -102,6 +102,8 @@ pub struct App {
     pub presence: std::collections::HashMap<String, Presence>,
     /// Monotonic counter for stamping outgoing messages with a unique local id.
     pub msg_seq: u64,
+    /// Active colour theme. Set from `WPP_THEME` at startup.
+    pub theme: crate::theme::Theme,
 }
 
 impl Default for App {
@@ -125,6 +127,7 @@ impl Default for App {
             history_loaded: std::collections::HashSet::new(),
             presence: std::collections::HashMap::new(),
             msg_seq: 0,
+            theme: crate::theme::Theme::retro(),
         }
     }
 }

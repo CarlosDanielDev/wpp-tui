@@ -6,6 +6,7 @@ mod fuzzy;
 mod notify;
 mod qr;
 mod store;
+mod theme;
 mod tui;
 mod ui;
 mod widgets;
@@ -51,7 +52,10 @@ async fn main() -> Result<()> {
     // Contacts are fetched lazily once the backend reports `Connected` (see the
     // event loop) — the real bridge has no contacts until the device is paired,
     // so fetching here would fail before the QR is ever shown.
-    let mut app = App::default();
+    let mut app = App {
+        theme: theme::Theme::from_env(),
+        ..App::default()
+    };
 
     let mut terminal = tui::init()?;
     let result = run(&mut terminal, &mut app, backend).await;
