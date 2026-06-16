@@ -11,16 +11,19 @@ use crossterm::event::{KeyCode, KeyEvent};
 
 use crate::backend::{BackendEvent, Contact, Message};
 
-/// Which screen is currently shown. Mirrors the P1 routing: login → contacts →
-/// chat.
+/// Top-level screen. Login is the QR pairing screen; Main is the persistent
+/// two-pane layout shown after connecting.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Screen {
-    /// Waiting for / showing the QR code to pair.
     Login,
-    /// The contact / recent-chat list.
-    Contacts,
-    /// An open one-to-one conversation.
-    Chat,
+    Main,
+}
+
+/// Which region of the Main screen has keyboard focus. (#29 adds `Search`.)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Focus {
+    Sidebar,
+    Input,
 }
 
 /// A side effect the event loop should perform after a keystroke. Returning an
@@ -43,11 +46,15 @@ pub enum Action {
 /// methods below.
 pub struct App {
     pub screen: Screen,
+    /// Which region of the Main screen has keyboard focus.
+    pub focus: Focus,
     /// QR string to render while on the login screen.
     pub qr: Option<String>,
     /// Set once the backend reports a successful pairing.
     pub connected: bool,
     pub contacts: Vec<Contact>,
+    /// JIDs that have messages, most-recent-activity first. Drives the sidebar.
+    pub chat_order: Vec<String>,
     /// Cursor into `contacts` on the contacts screen.
     pub selected: usize,
     /// Per-chat message history, keyed by chat JID.
@@ -73,9 +80,11 @@ impl Default for App {
     fn default() -> Self {
         Self {
             screen: Screen::Login,
+            focus: Focus::Sidebar,
             qr: None,
             connected: false,
             contacts: Vec::new(),
+            chat_order: Vec::new(),
             selected: 0,
             messages: HashMap::new(),
             open_chat: None,
@@ -100,6 +109,14 @@ impl App {
         self.contacts = contacts;
     }
 
+    /// Move `chat` to the front of the sidebar order (insert if new).
+    fn front_chat(&mut self, chat: &str) {
+        if let Some(pos) = self.chat_order.iter().position(|c| c == chat) {
+            self.chat_order.remove(pos);
+        }
+        self.chat_order.insert(0, chat.to_string());
+    }
+
     /// Fold a backend event into state. Pure: no I/O, no redraw.
     pub fn apply_event(&mut self, event: BackendEvent) {
         match event {
@@ -112,14 +129,16 @@ impl App {
                 self.connected = true;
                 // Advance off the login screen on first connect only.
                 if self.screen == Screen::Login {
-                    self.screen = Screen::Contacts;
+                    self.screen = Screen::Main;
+                    self.focus = Focus::Sidebar;
                 }
                 self.status = "Connected".to_string();
             }
             BackendEvent::Message { chat, msg } => {
                 let focused =
-                    self.screen == Screen::Chat && self.open_chat.as_deref() == Some(chat.as_str());
+                    self.focus == Focus::Input && self.open_chat.as_deref() == Some(chat.as_str());
                 self.messages.entry(chat.clone()).or_default().push(msg);
+                self.front_chat(&chat);
                 if !focused {
                     *self.unread.entry(chat).or_insert(0) += 1;
                 }
@@ -131,8 +150,10 @@ impl App {
     pub fn on_key(&mut self, key: KeyEvent) -> Action {
         match self.screen {
             Screen::Login => self.on_key_login(key),
-            Screen::Contacts => self.on_key_contacts(key),
-            Screen::Chat => self.on_key_chat(key),
+            Screen::Main => match self.focus {
+                Focus::Sidebar => self.on_key_sidebar(key),
+                Focus::Input => self.on_key_input(key),
+            },
         }
     }
 
@@ -143,9 +164,13 @@ impl App {
         }
     }
 
-    fn on_key_contacts(&mut self, key: KeyEvent) -> Action {
+    fn on_key_sidebar(&mut self, key: KeyEvent) -> Action {
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc => Action::Quit,
+            KeyCode::Tab => {
+                self.focus = Focus::Input;
+                Action::None
+            }
             KeyCode::Char('r') | KeyCode::F(5) => Action::Refresh,
             KeyCode::Up | KeyCode::Char('k') => {
                 if self.selected > 0 {
@@ -154,17 +179,16 @@ impl App {
                 Action::None
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                if self.selected + 1 < self.contacts.len() {
+                if self.selected + 1 < self.chat_order.len() {
                     self.selected += 1;
                 }
                 Action::None
             }
             KeyCode::Enter => {
-                if let Some(contact) = self.contacts.get(self.selected) {
-                    let jid = contact.jid.clone();
+                if let Some(jid) = self.chat_order.get(self.selected).cloned() {
                     self.unread.remove(&jid);
                     self.open_chat = Some(jid.clone());
-                    self.screen = Screen::Chat;
+                    self.focus = Focus::Input;
                     self.input.clear();
                     return Action::OpenChat { chat: jid };
                 }
@@ -174,11 +198,15 @@ impl App {
         }
     }
 
-    fn on_key_chat(&mut self, key: KeyEvent) -> Action {
+    fn on_key_input(&mut self, key: KeyEvent) -> Action {
         match key.code {
             KeyCode::Esc => {
-                self.screen = Screen::Contacts;
+                self.focus = Focus::Sidebar;
                 self.input.clear();
+                Action::None
+            }
+            KeyCode::Tab => {
+                self.focus = Focus::Sidebar;
                 Action::None
             }
             KeyCode::Backspace => {
@@ -207,6 +235,7 @@ impl App {
                         from_me: true,
                         body: body.clone(),
                     });
+                self.front_chat(&chat);
                 Action::Send { chat, body }
             }
             _ => Action::None,
@@ -266,10 +295,18 @@ mod tests {
     fn opening_a_chat_returns_openchat_action() {
         let mut app = App::default();
         app.apply_event(BackendEvent::Connected);
-        app.set_contacts(vec![Contact { jid: "a@s".into(), name: "A".into() }]);
+        app.set_contacts(vec![Contact {
+            jid: "a@s".into(),
+            name: "A".into(),
+        }]);
+        app.apply_event(BackendEvent::Message {
+            chat: "a@s".into(),
+            msg: msg(false, "hi"),
+        });
         let action = app.on_key(key(KeyCode::Enter));
         assert_eq!(action, Action::OpenChat { chat: "a@s".into() });
-        assert_eq!(app.screen, Screen::Chat);
+        assert_eq!(app.screen, Screen::Main);
+        assert_eq!(app.focus, Focus::Input);
     }
 
     #[test]
@@ -285,7 +322,10 @@ mod tests {
     #[test]
     fn load_history_does_not_clobber_live_messages() {
         let mut app = App::default();
-        app.apply_event(BackendEvent::Message { chat: "a@s".into(), msg: msg(false, "live") });
+        app.apply_event(BackendEvent::Message {
+            chat: "a@s".into(),
+            msg: msg(false, "live"),
+        });
         // History load after a live message has arrived is skipped for that chat.
         app.load_history("a@s".into(), vec![msg(false, "old")]);
         assert_eq!(app.messages.get("a@s").map(Vec::len), Some(1));
@@ -301,12 +341,13 @@ mod tests {
     }
 
     #[test]
-    fn connected_event_advances_to_contacts() {
+    fn connected_event_enters_main_focused_on_sidebar() {
         let mut app = App::default();
         assert_eq!(app.screen, Screen::Login);
         app.apply_event(BackendEvent::Connected);
         assert!(app.connected);
-        assert_eq!(app.screen, Screen::Contacts);
+        assert_eq!(app.screen, Screen::Main);
+        assert_eq!(app.focus, Focus::Sidebar);
     }
 
     #[test]
@@ -317,11 +358,16 @@ mod tests {
             jid: "a@s".into(),
             name: "A".into(),
         }]);
+        app.apply_event(BackendEvent::Message {
+            chat: "a@s".into(),
+            msg: msg(false, "hi"),
+        });
         app.on_key(key(KeyCode::Enter));
-        assert_eq!(app.screen, Screen::Chat);
-        // A re-connect event must not interrupt an open conversation.
+        assert!(app.open_chat.is_some());
+        // A re-connect event must not interrupt an open conversation: the
+        // `Connected` arm only re-screens from `Login`.
         app.apply_event(BackendEvent::Connected);
-        assert_eq!(app.screen, Screen::Chat);
+        assert!(app.open_chat.is_some());
     }
 
     #[test]
@@ -343,12 +389,18 @@ mod tests {
             name: "A".into(),
         }]);
         app.apply_event(BackendEvent::Connected);
+        // Seed the chat so it appears in `chat_order`, then open it (clears unread).
+        app.apply_event(BackendEvent::Message {
+            chat: "a@s".into(),
+            msg: msg(false, "seed"),
+        });
         app.on_key(key(KeyCode::Enter));
+        // A further message to the focused chat must not mark it unread.
         app.apply_event(BackendEvent::Message {
             chat: "a@s".into(),
             msg: msg(false, "hi"),
         });
-        assert_eq!(app.open_messages().len(), 1);
+        assert_eq!(app.open_messages().len(), 2);
         assert_eq!(app.unread.get("a@s"), None);
     }
 
@@ -366,6 +418,15 @@ mod tests {
                 name: "B".into(),
             },
         ]);
+        // Sidebar navigates `chat_order`; seed two chats via incoming messages.
+        app.apply_event(BackendEvent::Message {
+            chat: "a@s".into(),
+            msg: msg(false, "1"),
+        });
+        app.apply_event(BackendEvent::Message {
+            chat: "b@s".into(),
+            msg: msg(false, "2"),
+        });
         app.on_key(key(KeyCode::Up)); // already at top
         assert_eq!(app.selected, 0);
         app.on_key(key(KeyCode::Down));
@@ -399,6 +460,10 @@ mod tests {
             jid: "a@s".into(),
             name: "A".into(),
         }]);
+        app.apply_event(BackendEvent::Message {
+            chat: "a@s".into(),
+            msg: msg(false, "hi"),
+        });
         app.on_key(key(KeyCode::Enter)); // open chat
         for c in "yo".chars() {
             app.on_key(key(KeyCode::Char(c)));
@@ -413,10 +478,12 @@ mod tests {
             }
         );
         assert!(app.input.is_empty());
+        // Seeded incoming "hi" plus the echoed outgoing "yo".
         let sent = app.open_messages();
-        assert_eq!(sent.len(), 1);
-        assert!(sent[0].from_me);
-        assert_eq!(sent[0].body, "yo");
+        assert_eq!(sent.len(), 2);
+        let last = sent.last().unwrap();
+        assert!(last.from_me);
+        assert_eq!(last.body, "yo");
     }
 
     #[test]
@@ -427,23 +494,91 @@ mod tests {
             jid: "a@s".into(),
             name: "A".into(),
         }]);
+        app.apply_event(BackendEvent::Message {
+            chat: "a@s".into(),
+            msg: msg(false, "hi"),
+        });
         app.on_key(key(KeyCode::Enter));
         assert_eq!(app.on_key(key(KeyCode::Enter)), Action::None);
-        assert!(app.open_messages().is_empty());
+        // Only the seeded incoming message exists; the empty send added nothing.
+        assert_eq!(app.open_messages().len(), 1);
     }
 
     #[test]
-    fn esc_in_chat_returns_to_contacts() {
+    fn tab_cycles_sidebar_and_input() {
+        let mut app = App::default();
+        app.apply_event(BackendEvent::Connected);
+        assert_eq!(app.focus, Focus::Sidebar);
+        app.on_key(key(KeyCode::Tab));
+        assert_eq!(app.focus, Focus::Input);
+        app.on_key(key(KeyCode::Tab));
+        assert_eq!(app.focus, Focus::Sidebar);
+    }
+
+    #[test]
+    fn esc_from_sidebar_quits() {
+        let mut app = App::default();
+        app.apply_event(BackendEvent::Connected);
+        assert_eq!(app.on_key(key(KeyCode::Esc)), Action::Quit);
+    }
+
+    #[test]
+    fn esc_in_input_returns_to_sidebar() {
         let mut app = App::default();
         app.apply_event(BackendEvent::Connected);
         app.set_contacts(vec![Contact {
             jid: "a@s".into(),
             name: "A".into(),
         }]);
-        app.on_key(key(KeyCode::Enter));
-        assert_eq!(app.screen, Screen::Chat);
+        app.apply_event(BackendEvent::Message {
+            chat: "a@s".into(),
+            msg: msg(false, "hi"),
+        });
+        app.on_key(key(KeyCode::Enter)); // open a@s, focus → Input
+        assert_eq!(app.focus, Focus::Input);
         app.on_key(key(KeyCode::Esc));
-        assert_eq!(app.screen, Screen::Contacts);
+        assert_eq!(app.focus, Focus::Sidebar);
+    }
+
+    #[test]
+    fn incoming_message_fronts_chat_order() {
+        let mut app = App::default();
+        app.apply_event(BackendEvent::Message {
+            chat: "a@s".into(),
+            msg: msg(false, "1"),
+        });
+        app.apply_event(BackendEvent::Message {
+            chat: "b@s".into(),
+            msg: msg(false, "2"),
+        });
+        assert_eq!(app.chat_order, vec!["b@s".to_string(), "a@s".to_string()]);
+        // New activity on an existing chat moves it to the front, no duplicate.
+        app.apply_event(BackendEvent::Message {
+            chat: "a@s".into(),
+            msg: msg(false, "3"),
+        });
+        assert_eq!(app.chat_order, vec!["a@s".to_string(), "b@s".to_string()]);
+    }
+
+    #[test]
+    fn sending_fronts_chat_order() {
+        let mut app = App::default();
+        app.apply_event(BackendEvent::Connected);
+        app.set_contacts(vec![Contact {
+            jid: "a@s".into(),
+            name: "A".into(),
+        }]);
+        app.apply_event(BackendEvent::Message {
+            chat: "z@s".into(),
+            msg: msg(false, "x"),
+        });
+        app.open_chat = Some("a@s".into());
+        app.focus = Focus::Input;
+        for c in "hi".chars() {
+            app.on_key(key(KeyCode::Char(c)));
+        }
+        app.on_key(key(KeyCode::Enter)); // send
+        assert_eq!(app.chat_order.first().map(String::as_str), Some("a@s"));
     }
 
     #[test]

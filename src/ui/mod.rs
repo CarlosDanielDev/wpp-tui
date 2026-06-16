@@ -6,14 +6,16 @@
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Borders, List, ListItem, ListState, Paragraph, Wrap};
+use ratatui::widgets::{Block, BorderType, Borders, List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
 
-use crate::app::{App, Screen};
+use crate::app::{App, Focus, Screen};
 use crate::qr;
 
+mod chat;
+
 // Retro CRT palette — DOS-era phosphor green / amber on black. Mirrors
-// maestro's `retro()` theme.
+// maestro's `retro()` theme. The `chat` submodule reads these via `super::`.
 const BG: Color = Color::Rgb(0, 0, 0); // true black (not palette black, which themes tint)
 const GREEN: Color = Color::Rgb(0, 255, 65); // phosphor green, primary text
 const GREEN_DIM: Color = Color::Rgb(0, 180, 45); // secondary text
@@ -37,8 +39,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
 
     match app.screen {
         Screen::Login => draw_login(frame, app, chunks[0]),
-        Screen::Contacts => draw_contacts(frame, app, chunks[0]),
-        Screen::Chat => draw_chat(frame, app, chunks[0]),
+        Screen::Main => draw_main(frame, app, chunks[0]),
     }
     draw_status_bar(frame, app, chunks[1]);
 }
@@ -48,6 +49,24 @@ fn dos_block(title: &str) -> Block<'_> {
         .borders(Borders::ALL)
         .border_type(BorderType::Double)
         .border_style(Style::default().fg(AMBER_DK).bg(BG))
+        .style(Style::default().bg(BG).fg(GREEN))
+        .title(Span::styled(
+            format!(" {title} "),
+            Style::default()
+                .fg(AMBER)
+                .bg(BG)
+                .add_modifier(Modifier::BOLD),
+        ))
+}
+
+/// Like [`dos_block`] but the border brightens (amber) when the region is
+/// focused, dims (green) otherwise. (#16 will thread `app.theme` through here.)
+fn dos_block_focus(title: &str, focused: bool) -> Block<'_> {
+    let border = if focused { AMBER_DK } else { GREEN_DIM };
+    Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Double)
+        .border_style(Style::default().fg(border).bg(BG))
         .style(Style::default().bg(BG).fg(GREEN))
         .title(Span::styled(
             format!(" {title} "),
@@ -105,14 +124,15 @@ fn draw_login(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(para, inner);
 }
 
-fn draw_contacts(frame: &mut Frame, app: &App, area: Rect) {
-    let block = dos_block("Contacts");
+fn draw_sidebar(frame: &mut Frame, app: &App, area: Rect) {
+    let focused = app.focus == Focus::Sidebar;
+    let block = dos_block_focus("Chats", focused);
 
-    if app.contacts.is_empty() {
+    if app.chat_order.is_empty() {
         let inner = block.inner(area);
         frame.render_widget(block, area);
         let text = if app.connected {
-            "No contacts yet — syncing… press r to refresh"
+            "No chats yet"
         } else {
             "Connecting…"
         };
@@ -127,14 +147,20 @@ fn draw_contacts(frame: &mut Frame, app: &App, area: Rect) {
     }
 
     let items: Vec<ListItem> = app
-        .contacts
+        .chat_order
         .iter()
-        .map(|c| {
-            let unread = app.unread.get(&c.jid).copied().unwrap_or(0);
+        .map(|jid| {
+            let name = app
+                .contacts
+                .iter()
+                .find(|c| &c.jid == jid)
+                .map(|c| c.name.clone())
+                .unwrap_or_else(|| jid.clone());
+            let unread = app.unread.get(jid).copied().unwrap_or(0);
             let label = if unread > 0 {
-                format!("{} ({unread})", c.name)
+                format!("{name} ({unread})")
             } else {
-                c.name.clone()
+                name
             };
             let style = if unread > 0 {
                 Style::default().fg(AMBER).add_modifier(Modifier::BOLD)
@@ -151,67 +177,30 @@ fn draw_contacts(frame: &mut Frame, app: &App, area: Rect) {
             .fg(BG)
             .add_modifier(Modifier::BOLD),
     );
-
     let mut state = ListState::default();
-    state.select(Some(app.selected));
+    state.select(Some(
+        app.selected.min(app.chat_order.len().saturating_sub(1)),
+    ));
     frame.render_stateful_widget(list, area, &mut state);
 }
 
-fn draw_chat(frame: &mut Frame, app: &App, area: Rect) {
-    let rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(1), Constraint::Length(3)])
+fn draw_main(frame: &mut Frame, app: &App, area: Rect) {
+    let cols = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Length(32), Constraint::Min(1)])
         .split(area);
-
-    let title = app
-        .open_chat_name()
-        .map(|n| format!("Chat — {n}"))
-        .unwrap_or_else(|| "Chat".to_string());
-    let history_block = dos_block(&title);
-
-    let lines: Vec<Line> = app
-        .open_messages()
-        .iter()
-        .map(|m| {
-            if m.from_me {
-                Line::from(vec![
-                    Span::styled("→ ", Style::default().fg(AMBER)),
-                    Span::styled(m.body.clone(), Style::default().fg(GREEN)),
-                ])
-            } else {
-                Line::from(vec![
-                    Span::styled("← ", Style::default().fg(GREEN_DIM)),
-                    Span::styled(m.body.clone(), Style::default().fg(GREEN)),
-                ])
-            }
-        })
-        .collect();
-    let history = Paragraph::new(lines)
-        .block(history_block)
-        .wrap(Wrap { trim: false })
-        .style(Style::default().bg(BG));
-    frame.render_widget(history, rows[0]);
-
-    let input_block = dos_block("Message");
-    let input = Paragraph::new(Line::from(vec![
-        Span::styled(&app.input, Style::default().fg(AMBER)),
-        Span::styled(
-            "_",
-            Style::default()
-                .fg(AMBER)
-                .add_modifier(Modifier::SLOW_BLINK),
-        ),
-    ]))
-    .block(input_block)
-    .style(Style::default().bg(BG));
-    frame.render_widget(input, rows[1]);
+    draw_sidebar(frame, app, cols[0]);
+    match app.open_chat.as_ref() {
+        None => chat::draw_empty_pane(frame, cols[1]),
+        Some(_) => chat::draw_chat_pane(frame, app, cols[1]),
+    }
 }
 
 fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect) {
-    let keys = match app.screen {
-        Screen::Login => "F:Quit[q]",
-        Screen::Contacts => "↑↓/jk:Move  Enter:Open  r:Refresh  Quit[q]",
-        Screen::Chat => "Type:Compose  Enter:Send  Esc:Back",
+    let keys = match (app.screen, app.focus) {
+        (Screen::Login, _) => "Quit[q]",
+        (Screen::Main, Focus::Sidebar) => "↑↓/jk:Move  Enter:Open  Tab:Input  Quit[q/Esc]",
+        (Screen::Main, Focus::Input) => "Type  Enter:Send  Tab:Chats  Esc:Back",
     };
     let bar = Line::from(vec![
         Span::styled(
@@ -259,7 +248,7 @@ mod tests {
     }
 
     #[test]
-    fn contacts_screen_lists_names_and_unread() {
+    fn sidebar_lists_chats_not_all_contacts() {
         let mut app = App::default();
         app.apply_event(BackendEvent::Connected);
         app.set_contacts(vec![
@@ -272,6 +261,7 @@ mod tests {
                 name: "Bob".into(),
             },
         ]);
+        // Only Alice has a conversation.
         app.apply_event(BackendEvent::Message {
             chat: "a@s".into(),
             msg: Message {
@@ -281,13 +271,50 @@ mod tests {
         });
         let out = render(&app);
         assert!(out.contains("Alice"));
-        assert!(out.contains("Bob"));
-        // Unread badge.
-        assert!(out.contains("(1)"));
+        assert!(!out.contains("Bob")); // Bob has no chat → not in the sidebar
+        assert!(out.contains("(1)")); // unread badge
     }
 
     #[test]
-    fn chat_screen_shows_messages() {
+    fn empty_sidebar_shows_placeholder_message() {
+        let mut app = App::default();
+        app.apply_event(BackendEvent::Connected);
+        let out = render(&app);
+        assert!(out.contains("Chats"));
+        assert!(out.contains("No chats yet"));
+    }
+
+    #[test]
+    fn sidebar_before_connect_shows_connecting() {
+        let app = App {
+            screen: Screen::Main,
+            ..Default::default()
+        };
+        let out = render(&app);
+        assert!(out.contains("Chats"));
+        assert!(out.contains("Connecting"));
+    }
+
+    #[test]
+    fn main_idle_shows_empty_right_pane() {
+        let mut app = App::default();
+        app.apply_event(BackendEvent::Connected);
+        app.apply_event(BackendEvent::Message {
+            chat: "a@s".into(),
+            msg: Message {
+                from_me: false,
+                body: "hi".into(),
+            },
+        });
+        // No chat opened → right pane is the placeholder, not a chat.
+        let out = render(&app);
+        assert!(app.open_chat.is_none());
+        assert!(out.contains("No chat selected"));
+    }
+
+    #[test]
+    fn main_open_chat_shows_pane_with_history_and_input() {
+        use crossterm::event::{KeyCode, KeyEvent};
         let mut app = App::default();
         app.apply_event(BackendEvent::Connected);
         app.set_contacts(vec![Contact {
@@ -301,32 +328,35 @@ mod tests {
                 body: "hello there".into(),
             },
         });
-        // Open Alice's chat.
-        use crossterm::event::{KeyCode, KeyEvent};
         app.on_key(KeyEvent::from(KeyCode::Enter));
         let out = render(&app);
-        assert!(out.contains("hello there"));
-        assert!(out.contains("Alice"));
+        assert!(out.contains("Alice")); // pane header
+        assert!(out.contains("hello there")); // history
+        assert!(out.contains("Message")); // input box title
     }
 
     #[test]
-    fn empty_contacts_shows_placeholder_message() {
+    fn chat_history_sticks_to_bottom_when_overflowing() {
+        use crossterm::event::{KeyCode, KeyEvent};
         let mut app = App::default();
         app.apply_event(BackendEvent::Connected);
+        app.set_contacts(vec![Contact {
+            jid: "a@s".into(),
+            name: "Alice".into(),
+        }]);
+        for i in 0..60 {
+            app.apply_event(BackendEvent::Message {
+                chat: "a@s".into(),
+                msg: Message {
+                    from_me: false,
+                    body: format!("line-{i}"),
+                },
+            });
+        }
+        app.on_key(KeyEvent::from(KeyCode::Enter));
         let out = render(&app);
-        assert!(out.contains("Contacts"));
-        assert!(out.contains("No contacts yet"));
-    }
-
-    #[test]
-    fn contacts_screen_before_connect_shows_connecting() {
-        let app = App {
-            screen: Screen::Contacts,
-            ..Default::default()
-        };
-        let out = render(&app);
-        assert!(out.contains("Contacts"));
-        assert!(out.contains("Connecting"));
+        assert!(out.contains("line-59"));
+        assert!(!out.contains("line-0 "));
     }
 
     #[test]
