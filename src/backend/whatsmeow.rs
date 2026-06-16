@@ -12,7 +12,7 @@ use std::time::Duration;
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 
-use super::{Backend, BackendEvent, Contact, Message};
+use super::{Backend, BackendEvent, Contact, Message, Presence};
 use crate::bridge;
 
 /// Directory holding the whatsmeow SQLite session store. Overridable so several
@@ -78,6 +78,27 @@ fn parse_incoming(raw: &str) -> Option<(String, Message)> {
     ))
 }
 
+/// Parse a presence line: `jid\tstate\textra`, state ∈ {typing, online, offline}.
+fn parse_presence(raw: &str) -> Option<(String, Presence)> {
+    let mut parts = raw.splitn(3, '\t');
+    let jid = parts.next()?.to_string();
+    let state = parts.next()?;
+    let extra = parts.next().unwrap_or("");
+    let presence = match state {
+        "typing" => Presence::Typing,
+        "online" => Presence::Online,
+        "offline" => Presence::Offline {
+            last_seen: if extra.is_empty() {
+                None
+            } else {
+                Some(extra.to_string())
+            },
+        },
+        _ => return None,
+    };
+    Some((jid, presence))
+}
+
 #[async_trait]
 impl Backend for WhatsmeowBackend {
     async fn connect(&self) -> Result<()> {
@@ -126,6 +147,11 @@ impl Backend for WhatsmeowBackend {
             if let Some(raw) = bridge::poll_message() {
                 if let Some((chat, msg)) = parse_incoming(&raw) {
                     return Ok(BackendEvent::Message { chat, msg });
+                }
+            }
+            if let Some(raw) = bridge::poll_presence() {
+                if let Some((chat, state)) = parse_presence(&raw) {
+                    return Ok(BackendEvent::Presence { chat, state });
                 }
             }
             if bridge::is_connected() && !self.connected_emitted.swap(true, Ordering::SeqCst) {
@@ -196,5 +222,23 @@ mod tests {
         assert!(parse_incoming("").is_none());
         assert!(parse_incoming("only_jid").is_none());
         assert!(parse_incoming("jid\t0").is_none());
+    }
+
+    #[test]
+    fn parse_presence_decodes_states() {
+        use super::super::Presence;
+        let (c, s) = parse_presence("a@s\ttyping\t").unwrap();
+        assert_eq!(c, "a@s");
+        assert_eq!(s, Presence::Typing);
+        let (_, s) = parse_presence("a@s\tonline\t").unwrap();
+        assert_eq!(s, Presence::Online);
+        let (_, s) = parse_presence("a@s\toffline\ttoday 14:05").unwrap();
+        assert_eq!(
+            s,
+            Presence::Offline {
+                last_seen: Some("today 14:05".into())
+            }
+        );
+        assert!(parse_presence("bad").is_none());
     }
 }

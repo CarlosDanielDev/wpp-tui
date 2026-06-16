@@ -16,6 +16,21 @@ pub struct Message {
     pub body: String,
 }
 
+/// A contact's presence in a chat.
+// `Online`/`Offline` are only constructed by the whatsmeow FFI path and the
+// presence-label tests; the mock seeds only `Typing`, so the default build
+// would otherwise flag them as never-constructed.
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq)]
+pub enum Presence {
+    /// Composing a message right now.
+    Typing,
+    /// Online (no last-seen needed).
+    Online,
+    /// Offline; `last_seen` is a human string if the contact shares it.
+    Offline { last_seen: Option<String> },
+}
+
 /// An event pushed from the backend up to the app.
 #[derive(Debug, Clone)]
 pub enum BackendEvent {
@@ -25,6 +40,8 @@ pub enum BackendEvent {
     Connected,
     /// Incoming message for a chat.
     Message { chat: String, msg: Message },
+    /// A presence update for a chat.
+    Presence { chat: String, state: Presence },
 }
 
 /// Transport abstraction. The real implementation talks to whatsmeow over FFI;

@@ -370,4 +370,32 @@ mod tests {
         let out = render(&app);
         assert!(out.contains("jk:Move"));
     }
+
+    #[test]
+    fn chat_header_shows_typing_indicator() {
+        use crate::backend::Presence;
+        use crossterm::event::{KeyCode, KeyEvent};
+        let mut app = App::default();
+        app.apply_event(BackendEvent::Connected);
+        app.set_contacts(vec![Contact {
+            jid: "a@s".into(),
+            name: "Alice".into(),
+        }]);
+        // Seed the chat so it lands in `chat_order`, then open it.
+        app.apply_event(BackendEvent::Message {
+            chat: "a@s".into(),
+            msg: Message {
+                from_me: false,
+                body: "hi".into(),
+            },
+        });
+        app.on_key(KeyEvent::from(KeyCode::Enter));
+        app.apply_event(BackendEvent::Presence {
+            chat: "a@s".into(),
+            state: Presence::Typing,
+        });
+        let out = render(&app);
+        assert!(out.contains("Alice"));
+        assert!(out.contains("typing…"));
+    }
 }

@@ -9,7 +9,7 @@ use std::collections::HashMap;
 
 use crossterm::event::{KeyCode, KeyEvent};
 
-use crate::backend::{BackendEvent, Contact, Message};
+use crate::backend::{BackendEvent, Contact, Message, Presence};
 
 /// Top-level screen. Login is the QR pairing screen; Main is the persistent
 /// two-pane layout shown after connecting.
@@ -74,6 +74,8 @@ pub struct App {
     /// Chats whose persisted history has already been loaded, to avoid
     /// re-loading (and duplicating) on every reopen.
     pub history_loaded: std::collections::HashSet<String>,
+    /// Latest presence per chat JID.
+    pub presence: std::collections::HashMap<String, Presence>,
 }
 
 impl Default for App {
@@ -94,6 +96,7 @@ impl Default for App {
             should_quit: false,
             tick: 0,
             history_loaded: std::collections::HashSet::new(),
+            presence: std::collections::HashMap::new(),
         }
     }
 }
@@ -142,6 +145,9 @@ impl App {
                 if !focused {
                     *self.unread.entry(chat).or_insert(0) += 1;
                 }
+            }
+            BackendEvent::Presence { chat, state } => {
+                self.presence.insert(chat, state);
             }
         }
     }
@@ -273,6 +279,17 @@ impl App {
             .map(|c| c.name.clone())
             .unwrap_or_else(|| jid.clone());
         Some(name)
+    }
+
+    /// A short presence string for the open chat, if known.
+    pub fn presence_label(&self) -> Option<String> {
+        let jid = self.open_chat.as_ref()?;
+        match self.presence.get(jid)? {
+            Presence::Typing => Some("typing…".to_string()),
+            Presence::Online => Some("online".to_string()),
+            Presence::Offline { last_seen: Some(t) } => Some(format!("last seen {t}")),
+            Presence::Offline { last_seen: None } => Some("offline".to_string()),
+        }
     }
 }
 
@@ -579,6 +596,55 @@ mod tests {
         }
         app.on_key(key(KeyCode::Enter)); // send
         assert_eq!(app.chat_order.first().map(String::as_str), Some("a@s"));
+    }
+
+    #[test]
+    fn presence_event_is_stored() {
+        use crate::backend::Presence;
+        let mut app = App::default();
+        app.apply_event(BackendEvent::Presence {
+            chat: "a@s".into(),
+            state: Presence::Typing,
+        });
+        assert_eq!(app.presence.get("a@s"), Some(&Presence::Typing));
+    }
+
+    #[test]
+    fn presence_label_reflects_open_chat() {
+        use crate::backend::Presence;
+        let mut app = App::default();
+        app.apply_event(BackendEvent::Connected);
+        app.set_contacts(vec![Contact {
+            jid: "a@s".into(),
+            name: "A".into(),
+        }]);
+        // Seed the chat so it appears in `chat_order`, then open it.
+        app.apply_event(BackendEvent::Message {
+            chat: "a@s".into(),
+            msg: msg(false, "x"),
+        });
+        app.on_key(key(KeyCode::Enter)); // open a@s
+        assert_eq!(app.presence_label(), None);
+        app.apply_event(BackendEvent::Presence {
+            chat: "a@s".into(),
+            state: Presence::Typing,
+        });
+        assert_eq!(app.presence_label().as_deref(), Some("typing…"));
+        app.apply_event(BackendEvent::Presence {
+            chat: "a@s".into(),
+            state: Presence::Online,
+        });
+        assert_eq!(app.presence_label().as_deref(), Some("online"));
+        app.apply_event(BackendEvent::Presence {
+            chat: "a@s".into(),
+            state: Presence::Offline {
+                last_seen: Some("today 14:05".into()),
+            },
+        });
+        assert_eq!(
+            app.presence_label().as_deref(),
+            Some("last seen today 14:05")
+        );
     }
 
     #[test]
