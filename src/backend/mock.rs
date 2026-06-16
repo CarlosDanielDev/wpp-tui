@@ -5,7 +5,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use tokio::sync::Mutex;
 
-use super::{Backend, BackendEvent, Contact, Message};
+use super::{Backend, BackendEvent, Contact, Message, Presence};
 
 /// Simulated WhatsApp backend. Lets the TUI/UX be built and tested without a
 /// live account or the Go FFI layer.
@@ -24,6 +24,10 @@ impl Default for MockBackend {
                 from_me: false,
                 body: "hello from the mock backend".to_string(),
             },
+        });
+        events.push_back(BackendEvent::Presence {
+            chat: "5511999990000@s.whatsapp.net".to_string(),
+            state: Presence::Typing,
         });
         Self {
             events: Mutex::new(events),
@@ -82,5 +86,18 @@ mod tests {
             BackendEvent::Connected
         ));
         assert_eq!(backend.contacts().await.unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn mock_emits_a_presence_event() {
+        let backend = MockBackend::default();
+        let mut saw_presence = false;
+        for _ in 0..6 {
+            if let BackendEvent::Presence { .. } = backend.next_event().await.unwrap() {
+                saw_presence = true;
+                break;
+            }
+        }
+        assert!(saw_presence);
     }
 }
