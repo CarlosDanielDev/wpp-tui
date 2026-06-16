@@ -91,20 +91,6 @@ pub(super) fn draw_chat_pane(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(input, rows[1]);
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn delivery_markers_are_distinct_per_state() {
-        use crate::backend::DeliveryState::*;
-        assert_eq!(delivery_marker(Sending), "·");
-        assert_eq!(delivery_marker(Sent), "✓");
-        assert_eq!(delivery_marker(Delivered), "✓✓");
-        assert_eq!(delivery_marker(Read), "✔✔");
-    }
-}
-
 /// Placeholder shown in the right pane when no chat is open.
 pub(super) fn draw_empty_pane(frame: &mut Frame, area: Rect) {
     let block = dos_block_focus("", false);
@@ -117,4 +103,18 @@ pub(super) fn draw_empty_pane(frame: &mut Frame, area: Rect) {
     .alignment(Alignment::Center)
     .style(Style::default().bg(BG));
     frame.render_widget(para, inner);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn delivery_markers_are_distinct_per_state() {
+        use crate::backend::DeliveryState::*;
+        assert_eq!(delivery_marker(Sending), "·");
+        assert_eq!(delivery_marker(Sent), "✓");
+        assert_eq!(delivery_marker(Delivered), "✓✓");
+        assert_eq!(delivery_marker(Read), "✔✔");
+    }
 }
