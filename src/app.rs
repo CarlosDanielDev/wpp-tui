@@ -135,8 +135,8 @@ impl App {
                 self.status = "Connected".to_string();
             }
             BackendEvent::Message { chat, msg } => {
-                let focused = self.focus == Focus::Input
-                    && self.open_chat.as_deref() == Some(chat.as_str());
+                let focused =
+                    self.focus == Focus::Input && self.open_chat.as_deref() == Some(chat.as_str());
                 self.messages.entry(chat.clone()).or_default().push(msg);
                 self.front_chat(&chat);
                 if !focused {
@@ -287,8 +287,14 @@ mod tests {
     fn opening_a_chat_returns_openchat_action() {
         let mut app = App::default();
         app.apply_event(BackendEvent::Connected);
-        app.set_contacts(vec![Contact { jid: "a@s".into(), name: "A".into() }]);
-        app.apply_event(BackendEvent::Message { chat: "a@s".into(), msg: msg(false, "hi") });
+        app.set_contacts(vec![Contact {
+            jid: "a@s".into(),
+            name: "A".into(),
+        }]);
+        app.apply_event(BackendEvent::Message {
+            chat: "a@s".into(),
+            msg: msg(false, "hi"),
+        });
         let action = app.on_key(key(KeyCode::Enter));
         assert_eq!(action, Action::OpenChat { chat: "a@s".into() });
         assert_eq!(app.screen, Screen::Main);
@@ -308,7 +314,10 @@ mod tests {
     #[test]
     fn load_history_does_not_clobber_live_messages() {
         let mut app = App::default();
-        app.apply_event(BackendEvent::Message { chat: "a@s".into(), msg: msg(false, "live") });
+        app.apply_event(BackendEvent::Message {
+            chat: "a@s".into(),
+            msg: msg(false, "live"),
+        });
         // History load after a live message has arrived is skipped for that chat.
         app.load_history("a@s".into(), vec![msg(false, "old")]);
         assert_eq!(app.messages.get("a@s").map(Vec::len), Some(1));

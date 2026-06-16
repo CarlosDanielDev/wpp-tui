@@ -10,6 +10,7 @@ use ratatui::widgets::{Block, BorderType, Borders, List, ListItem, ListState, Pa
 use ratatui::Frame;
 
 use crate::app::{App, Focus, Screen};
+use crate::backend::Message;
 use crate::qr;
 
 // Retro CRT palette — DOS-era phosphor green / amber on black. Mirrors
@@ -122,59 +123,13 @@ fn draw_login(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(para, inner);
 }
 
-fn draw_contacts(frame: &mut Frame, app: &App, area: Rect) {
-    let block = dos_block("Contacts");
-
-    if app.contacts.is_empty() {
-        let inner = block.inner(area);
-        frame.render_widget(block, area);
-        let text = if app.connected {
-            "No contacts yet — syncing… press r to refresh"
-        } else {
-            "Connecting…"
-        };
-        let para = Paragraph::new(Line::from(Span::styled(
-            text,
-            Style::default().fg(GREEN_DIM),
-        )))
-        .alignment(Alignment::Center)
-        .style(Style::default().bg(BG));
-        frame.render_widget(para, inner);
-        return;
-    }
-
-    let items: Vec<ListItem> = app
-        .contacts
-        .iter()
-        .map(|c| {
-            let unread = app.unread.get(&c.jid).copied().unwrap_or(0);
-            let label = if unread > 0 {
-                format!("{} ({unread})", c.name)
-            } else {
-                c.name.clone()
-            };
-            let style = if unread > 0 {
-                Style::default().fg(AMBER).add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(GREEN)
-            };
-            ListItem::new(Line::from(Span::styled(label, style)))
-        })
-        .collect();
-
-    let list = List::new(items).block(block).highlight_style(
-        Style::default()
-            .bg(AMBER_DK)
-            .fg(BG)
-            .add_modifier(Modifier::BOLD),
-    );
-
-    let mut state = ListState::default();
-    state.select(Some(app.selected));
-    frame.render_stateful_widget(list, area, &mut state);
+/// Last `rows` messages — the slice visible when the pane sticks to the bottom.
+fn visible_tail(messages: &[Message], rows: usize) -> &[Message] {
+    let start = messages.len().saturating_sub(rows);
+    &messages[start..]
 }
 
-fn draw_chat(frame: &mut Frame, app: &App, area: Rect) {
+fn draw_chat_pane(frame: &mut Frame, app: &App, area: Rect) {
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(1), Constraint::Length(3)])
@@ -184,10 +139,11 @@ fn draw_chat(frame: &mut Frame, app: &App, area: Rect) {
         .open_chat_name()
         .map(|n| format!("Chat — {n}"))
         .unwrap_or_else(|| "Chat".to_string());
-    let history_block = dos_block(&title);
+    let history_block = dos_block_focus(&title, false);
 
-    let lines: Vec<Line> = app
-        .open_messages()
+    // -2 for the history block's top/bottom borders.
+    let visible_rows = (rows[0].height as usize).saturating_sub(2);
+    let lines: Vec<Line> = visible_tail(app.open_messages(), visible_rows)
         .iter()
         .map(|m| {
             if m.from_me {
@@ -209,7 +165,7 @@ fn draw_chat(frame: &mut Frame, app: &App, area: Rect) {
         .style(Style::default().bg(BG));
     frame.render_widget(history, rows[0]);
 
-    let input_block = dos_block("Message");
+    let input_block = dos_block_focus("Message", app.focus == Focus::Input);
     let input = Paragraph::new(Line::from(vec![
         Span::styled(&app.input, Style::default().fg(AMBER)),
         Span::styled(
@@ -278,13 +234,35 @@ fn draw_sidebar(frame: &mut Frame, app: &App, area: Rect) {
             .add_modifier(Modifier::BOLD),
     );
     let mut state = ListState::default();
-    state.select(Some(app.selected.min(app.chat_order.len().saturating_sub(1))));
+    state.select(Some(
+        app.selected.min(app.chat_order.len().saturating_sub(1)),
+    ));
     frame.render_stateful_widget(list, area, &mut state);
 }
 
-// Temporary shim: Task 4 builds the real two-pane `draw_main`.
 fn draw_main(frame: &mut Frame, app: &App, area: Rect) {
-    draw_sidebar(frame, app, area);
+    let cols = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Length(32), Constraint::Min(1)])
+        .split(area);
+    draw_sidebar(frame, app, cols[0]);
+    match app.open_chat.as_ref() {
+        None => draw_empty_pane(frame, cols[1]),
+        Some(_) => draw_chat_pane(frame, app, cols[1]),
+    }
+}
+
+fn draw_empty_pane(frame: &mut Frame, area: Rect) {
+    let block = dos_block_focus("", false);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    let para = Paragraph::new(Line::from(Span::styled(
+        "No chat selected — pick one on the left",
+        Style::default().fg(GREEN_DIM),
+    )))
+    .alignment(Alignment::Center)
+    .style(Style::default().bg(BG));
+    frame.render_widget(para, inner);
 }
 
 fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect) {
@@ -384,6 +362,70 @@ mod tests {
         let out = render(&app);
         assert!(out.contains("Chats"));
         assert!(out.contains("Connecting"));
+    }
+
+    #[test]
+    fn main_idle_shows_empty_right_pane() {
+        let mut app = App::default();
+        app.apply_event(BackendEvent::Connected);
+        app.apply_event(BackendEvent::Message {
+            chat: "a@s".into(),
+            msg: Message {
+                from_me: false,
+                body: "hi".into(),
+            },
+        });
+        // No chat opened → right pane is the placeholder, not a chat.
+        let out = render(&app);
+        assert!(app.open_chat.is_none());
+        assert!(out.contains("No chat selected"));
+    }
+
+    #[test]
+    fn main_open_chat_shows_pane_with_history_and_input() {
+        use crossterm::event::{KeyCode, KeyEvent};
+        let mut app = App::default();
+        app.apply_event(BackendEvent::Connected);
+        app.set_contacts(vec![Contact {
+            jid: "a@s".into(),
+            name: "Alice".into(),
+        }]);
+        app.apply_event(BackendEvent::Message {
+            chat: "a@s".into(),
+            msg: Message {
+                from_me: false,
+                body: "hello there".into(),
+            },
+        });
+        app.on_key(KeyEvent::from(KeyCode::Enter));
+        let out = render(&app);
+        assert!(out.contains("Alice")); // pane header
+        assert!(out.contains("hello there")); // history
+        assert!(out.contains("Message")); // input box title
+    }
+
+    #[test]
+    fn chat_history_sticks_to_bottom_when_overflowing() {
+        use crossterm::event::{KeyCode, KeyEvent};
+        let mut app = App::default();
+        app.apply_event(BackendEvent::Connected);
+        app.set_contacts(vec![Contact {
+            jid: "a@s".into(),
+            name: "Alice".into(),
+        }]);
+        for i in 0..60 {
+            app.apply_event(BackendEvent::Message {
+                chat: "a@s".into(),
+                msg: Message {
+                    from_me: false,
+                    body: format!("line-{i}"),
+                },
+            });
+        }
+        app.on_key(KeyEvent::from(KeyCode::Enter));
+        let out = render(&app);
+        assert!(out.contains("line-59"));
+        assert!(!out.contains("line-0 "));
     }
 
     #[test]
