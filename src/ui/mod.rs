@@ -197,7 +197,14 @@ fn draw_sidebar(frame: &mut Frame, app: &App, area: Rect) {
                     } else {
                         Style::default().fg(t.primary)
                     };
-                    ListItem::new(Line::from(Span::styled(label, style)))
+                    let mut spans = vec![Span::styled(label, style)];
+                    if row.has_draft {
+                        spans.push(Span::styled(
+                            "  ✎ draft",
+                            Style::default().fg(t.dim).add_modifier(Modifier::ITALIC),
+                        ));
+                    }
+                    ListItem::new(Line::from(spans))
                 }
             }
         })
@@ -340,6 +347,28 @@ mod tests {
         assert!(out.contains("ali")); // query echoed in the search box
         assert!(out.contains("Alice")); // matching chat
         assert!(!out.contains("Bob")); // filtered out
+    }
+
+    #[test]
+    fn sidebar_marks_a_chat_with_an_unsent_draft() {
+        use crossterm::event::{KeyCode, KeyEvent};
+        let mut app = App::default();
+        app.apply_event(BackendEvent::Connected);
+        app.set_contacts(vec![Contact {
+            jid: "a@s".into(),
+            name: "Alice".into(),
+        }]);
+        app.apply_event(BackendEvent::Message {
+            chat: "a@s".into(),
+            msg: Message::incoming("hi"),
+        });
+        app.on_key(KeyEvent::from(KeyCode::Enter)); // open Alice, focus input
+        for c in "later".chars() {
+            app.on_key(KeyEvent::from(KeyCode::Char(c)));
+        }
+        app.on_key(KeyEvent::from(KeyCode::Esc)); // keep draft, back to sidebar
+        let out = render(&app);
+        assert!(out.contains("draft"));
     }
 
     #[test]

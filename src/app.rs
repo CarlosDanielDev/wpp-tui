@@ -26,6 +26,8 @@ pub struct Row {
     pub name: String,
     pub unread: usize,
     pub kind: Kind,
+    /// Whether this chat has unsent draft text.
+    pub has_draft: bool,
 }
 
 /// Top-level screen. Login is the QR pairing screen; Main is the persistent
@@ -102,6 +104,9 @@ pub struct App {
     pub presence: std::collections::HashMap<String, Presence>,
     /// Monotonic counter for stamping outgoing messages with a unique local id.
     pub msg_seq: u64,
+    /// Unsent drafts per chat JID. The open chat's draft lives in `input`; this
+    /// holds the others, swapped in/out as chats are opened.
+    pub drafts: std::collections::HashMap<String, String>,
     /// Active colour theme. Set from `WPP_THEME` at startup.
     pub theme: crate::theme::Theme,
     /// When set, a modal overlay (e.g. disconnect/reconnect status) is shown.
@@ -129,6 +134,7 @@ impl Default for App {
             history_loaded: std::collections::HashSet::new(),
             presence: std::collections::HashMap::new(),
             msg_seq: 0,
+            drafts: std::collections::HashMap::new(),
             theme: crate::theme::Theme::retro(),
             overlay: None,
         }
@@ -176,6 +182,31 @@ impl App {
         }
     }
 
+    /// Whether `jid` has unsent draft text. The open chat's draft is the live
+    /// `input`; others are stashed in `drafts`.
+    pub fn has_draft(&self, jid: &str) -> bool {
+        if self.open_chat.as_deref() == Some(jid) {
+            !self.input.trim().is_empty()
+        } else {
+            self.drafts.get(jid).is_some_and(|d| !d.trim().is_empty())
+        }
+    }
+
+    /// Stash the open chat's current `input` into `drafts` (or drop an empty
+    /// one), then load `jid`'s stored draft into `input`. Called when switching
+    /// the open chat so each conversation keeps its own unsent text.
+    fn swap_draft_to(&mut self, jid: &str) {
+        if let Some(prev) = self.open_chat.take() {
+            let draft = std::mem::take(&mut self.input);
+            if draft.trim().is_empty() {
+                self.drafts.remove(&prev);
+            } else {
+                self.drafts.insert(prev, draft);
+            }
+        }
+        self.input = self.drafts.get(jid).cloned().unwrap_or_default();
+    }
+
     fn display_name(&self, jid: &str) -> String {
         self.contacts
             .iter()
@@ -203,6 +234,7 @@ impl App {
                 Some((
                     score,
                     Row {
+                        has_draft: self.has_draft(jid),
                         jid: jid.clone(),
                         name,
                         unread: self.unread.get(jid).copied().unwrap_or(0),
@@ -227,6 +259,7 @@ impl App {
                 Some((
                     score,
                     Row {
+                        has_draft: self.has_draft(&c.jid),
                         jid: c.jid.clone(),
                         name: c.name.clone(),
                         unread: 0,
@@ -358,9 +391,10 @@ impl App {
                 if let Some(row) = rows.get(self.selected) {
                     let jid = row.jid.clone();
                     self.unread.remove(&jid);
+                    // Stash the previous chat's draft and restore this one's.
+                    self.swap_draft_to(&jid);
                     self.open_chat = Some(jid.clone());
                     self.focus = Focus::Input;
-                    self.input.clear();
                     self.query.clear();
                     self.sync_selection_to_open();
                     return Action::OpenChat { chat: jid };
@@ -374,8 +408,9 @@ impl App {
     fn on_key_input(&mut self, key: KeyEvent) -> Action {
         match key.code {
             KeyCode::Esc => {
+                // Leave the draft intact; it stays bound to the open chat and is
+                // stashed when another chat is opened.
                 self.focus = Focus::Sidebar;
-                self.input.clear();
                 Action::None
             }
             KeyCode::Tab => {
@@ -408,6 +443,7 @@ impl App {
                 m.status = DeliveryState::Sent;
                 self.messages.entry(chat.clone()).or_default().push(m);
                 self.front_chat(&chat);
+                self.drafts.remove(&chat); // sent → draft gone
                 self.sync_selection_to_open();
                 Action::Send { id, chat, body }
             }
@@ -475,6 +511,73 @@ mod tests {
             body: body.to_string(),
             status: DeliveryState::Sent,
         }
+    }
+
+    #[test]
+    fn esc_keeps_the_draft_in_the_box() {
+        let mut app = App::default();
+        app.apply_event(BackendEvent::Connected);
+        app.apply_event(BackendEvent::Message {
+            chat: "a@s".into(),
+            msg: msg(false, "hi"),
+        });
+        app.on_key(key(KeyCode::Enter)); // open a@s, focus Input
+        for c in "wip".chars() {
+            app.on_key(key(KeyCode::Char(c)));
+        }
+        app.on_key(key(KeyCode::Esc));
+        assert_eq!(app.focus, Focus::Sidebar);
+        assert_eq!(app.input, "wip"); // draft preserved, not wiped
+        assert!(app.has_draft("a@s"));
+    }
+
+    #[test]
+    fn draft_is_per_chat_and_restored_on_switch() {
+        let mut app = App::default();
+        app.apply_event(BackendEvent::Connected);
+        app.apply_event(BackendEvent::Message {
+            chat: "a@s".into(),
+            msg: msg(false, "1"),
+        });
+        app.apply_event(BackendEvent::Message {
+            chat: "b@s".into(),
+            msg: msg(false, "2"),
+        });
+        // chat_order = [b, a]; open a@s and type a draft.
+        app.selected = 1;
+        app.on_key(key(KeyCode::Enter));
+        for c in "hey a".chars() {
+            app.on_key(key(KeyCode::Char(c)));
+        }
+        // Esc back to the sidebar (draft kept), then switch to b@s.
+        app.on_key(key(KeyCode::Esc));
+        app.selected = 0;
+        app.on_key(key(KeyCode::Enter));
+        assert_eq!(app.open_chat.as_deref(), Some("b@s"));
+        assert_eq!(app.input, ""); // b has no draft
+                                   // Esc and reopen a@s — its draft is restored.
+        app.on_key(key(KeyCode::Esc));
+        app.selected = app.chat_order.iter().position(|c| c == "a@s").unwrap();
+        app.on_key(key(KeyCode::Enter));
+        assert_eq!(app.open_chat.as_deref(), Some("a@s"));
+        assert_eq!(app.input, "hey a");
+    }
+
+    #[test]
+    fn sending_clears_the_draft() {
+        let mut app = App::default();
+        app.apply_event(BackendEvent::Connected);
+        app.apply_event(BackendEvent::Message {
+            chat: "a@s".into(),
+            msg: msg(false, "1"),
+        });
+        app.on_key(key(KeyCode::Enter));
+        for c in "yo".chars() {
+            app.on_key(key(KeyCode::Char(c)));
+        }
+        app.on_key(key(KeyCode::Enter)); // send
+        assert!(app.input.is_empty());
+        assert!(!app.has_draft("a@s"));
     }
 
     #[test]
