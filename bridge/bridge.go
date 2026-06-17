@@ -19,10 +19,13 @@ import (
 	"sync/atomic"
 	"unsafe"
 
-	"go.mau.fi/whatsmeow"
-	"go.mau.fi/whatsmeow/store/sqlstore"
-	"go.mau.fi/whatsmeow/types/events"
 	_ "github.com/mattn/go-sqlite3"
+	"go.mau.fi/whatsmeow"
+	"go.mau.fi/whatsmeow/proto/waE2E"
+	"go.mau.fi/whatsmeow/store/sqlstore"
+	"go.mau.fi/whatsmeow/types"
+	"go.mau.fi/whatsmeow/types/events"
+	"google.golang.org/protobuf/proto"
 )
 
 var (
@@ -33,6 +36,12 @@ var (
 	lastErr   atomic.Value
 	ctx       context.Context
 	cancelFn  context.CancelFunc
+	msgMu     sync.Mutex
+	msgQueue  []string
+	presMu    sync.Mutex
+	presQueue []string
+	rcptMu    sync.Mutex
+	rcptQueue []string
 )
 
 func setError(err error) {
@@ -40,6 +49,21 @@ func setError(err error) {
 		return
 	}
 	lastErr.Store(err.Error())
+}
+
+// canonicalChat returns a stable, phone-number-form JID string for a chat, so a
+// single person is never split across their LID (@lid) and phone-number
+// (@s.whatsapp.net) identities. Device (AD) suffixes are stripped; an @lid JID
+// is mapped to its phone number via the LID store when a mapping is known.
+// Groups, broadcast, newsletters, etc. pass through unchanged (sans device).
+func canonicalChat(c *whatsmeow.Client, jid types.JID) string {
+	jid = jid.ToNonAD()
+	if jid.Server == types.HiddenUserServer && c.Store != nil && c.Store.LIDs != nil {
+		if pn, err := c.Store.LIDs.GetPNForLID(context.Background(), jid); err == nil && !pn.IsEmpty() {
+			return pn.ToNonAD().String()
+		}
+	}
+	return jid.String()
 }
 
 //export wpp_bridge_version
@@ -83,11 +107,74 @@ func wpp_bridge_init(dataDir *C.char) C.int {
 	c := whatsmeow.NewClient(deviceStore, nil)
 
 	c.AddEventHandler(func(evt interface{}) {
-		switch evt.(type) {
+		switch v := evt.(type) {
 		case *events.Connected:
 			connected.Store(true)
 		case *events.Disconnected:
 			connected.Store(false)
+		case *events.Message:
+			text := v.Message.GetConversation()
+			if text == "" {
+				if ext := v.Message.GetExtendedTextMessage(); ext != nil {
+					text = ext.GetText()
+				}
+			}
+			if text == "" {
+				return // non-text message; ignore for the text-only phase
+			}
+			flag := "0"
+			if v.Info.IsFromMe {
+				flag = "1"
+			}
+			line := canonicalChat(c, v.Info.Chat) + "\t" + flag + "\t" + text
+			msgMu.Lock()
+			msgQueue = append(msgQueue, line)
+			msgMu.Unlock()
+		case *events.ChatPresence:
+			// Typing notification. "composing" → typing; "paused" → online.
+			state := "online"
+			if v.State == types.ChatPresenceComposing {
+				state = "typing"
+			}
+			line := canonicalChat(c, v.MessageSource.Chat) + "\t" + state + "\t"
+			presMu.Lock()
+			presQueue = append(presQueue, line)
+			presMu.Unlock()
+		case *events.Presence:
+			// Online / offline (with optional last-seen) for a subscribed user.
+			var line string
+			if v.Unavailable {
+				lastSeen := ""
+				if !v.LastSeen.IsZero() {
+					lastSeen = v.LastSeen.Local().Format("2006-01-02 15:04")
+				}
+				line = canonicalChat(c, v.From) + "\toffline\t" + lastSeen
+			} else {
+				line = canonicalChat(c, v.From) + "\tonline\t"
+			}
+			presMu.Lock()
+			presQueue = append(presQueue, line)
+			presMu.Unlock()
+		case *events.Receipt:
+			// Delivery / read receipt for one or more of our sent messages.
+			state := ""
+			switch v.Type {
+			case types.ReceiptTypeDelivered:
+				state = "delivered"
+			case types.ReceiptTypeRead, types.ReceiptTypeReadSelf:
+				state = "read"
+			}
+			if state == "" || len(v.MessageIDs) == 0 {
+				return // playedself / other receipt types we don't surface
+			}
+			ids := make([]string, len(v.MessageIDs))
+			for i, id := range v.MessageIDs {
+				ids[i] = string(id)
+			}
+			line := canonicalChat(c, v.MessageSource.Chat) + "\t" + state + "\t" + strings.Join(ids, ",")
+			rcptMu.Lock()
+			rcptQueue = append(rcptQueue, line)
+			rcptMu.Unlock()
 		}
 	})
 
@@ -230,6 +317,12 @@ func wpp_bridge_fetch_contacts() *C.char {
 		return nil
 	}
 
+	// Emit every contact under its own JID key (both phone-number and LID
+	// entries). Name resolution must stay keyed by whatever JID a chat actually
+	// uses, so a chat that is still LID-keyed (e.g. restored from an older store)
+	// keeps its pushname instead of falling back to a raw JID. The split between
+	// a person's LID and PN identities is collapsed at the message boundary
+	// (see canonicalChat), not by dropping contact keys here.
 	var lines []string
 	for jid, info := range contacts {
 		name := info.FullName
@@ -249,6 +342,94 @@ func wpp_bridge_fetch_contacts() *C.char {
 	}
 
 	return C.CString(strings.Join(lines, "\n"))
+}
+
+//export wpp_bridge_send_text
+func wpp_bridge_send_text(idStr *C.char, jidStr *C.char, body *C.char) C.int {
+	mu.Lock()
+	c := client
+	mu.Unlock()
+
+	if c == nil {
+		setError(fmt.Errorf("send: bridge not initialized"))
+		return -1
+	}
+
+	to, err := types.ParseJID(C.GoString(jidStr))
+	if err != nil {
+		setError(fmt.Errorf("send: parse jid: %w", err))
+		return -2
+	}
+
+	msg := &waE2E.Message{Conversation: proto.String(C.GoString(body))}
+	// Stamp the message with our local id so delivery receipts can be matched
+	// back to it on the Rust side.
+	extra := whatsmeow.SendRequestExtra{ID: types.MessageID(C.GoString(idStr))}
+	if _, err := c.SendMessage(context.Background(), to, msg, extra); err != nil {
+		setError(fmt.Errorf("send: %w", err))
+		return -3
+	}
+	return 0
+}
+
+//export wpp_bridge_poll_message
+func wpp_bridge_poll_message() *C.char {
+	msgMu.Lock()
+	defer msgMu.Unlock()
+	if len(msgQueue) == 0 {
+		return nil
+	}
+	line := msgQueue[0]
+	msgQueue = msgQueue[1:]
+	return C.CString(line)
+}
+
+//export wpp_bridge_poll_presence
+func wpp_bridge_poll_presence() *C.char {
+	presMu.Lock()
+	defer presMu.Unlock()
+	if len(presQueue) == 0 {
+		return nil
+	}
+	line := presQueue[0]
+	presQueue = presQueue[1:]
+	return C.CString(line)
+}
+
+//export wpp_bridge_poll_receipt
+func wpp_bridge_poll_receipt() *C.char {
+	rcptMu.Lock()
+	defer rcptMu.Unlock()
+	if len(rcptQueue) == 0 {
+		return nil
+	}
+	line := rcptQueue[0]
+	rcptQueue = rcptQueue[1:]
+	return C.CString(line)
+}
+
+//export wpp_bridge_subscribe_presence
+func wpp_bridge_subscribe_presence(jidStr *C.char) C.int {
+	mu.Lock()
+	c := client
+	mu.Unlock()
+
+	if c == nil {
+		setError(fmt.Errorf("subscribe_presence: bridge not initialized"))
+		return -1
+	}
+
+	jid, err := types.ParseJID(C.GoString(jidStr))
+	if err != nil {
+		setError(fmt.Errorf("subscribe_presence: parse jid: %w", err))
+		return -2
+	}
+
+	if err := c.SubscribePresence(context.Background(), jid); err != nil {
+		setError(fmt.Errorf("subscribe_presence: %w", err))
+		return -3
+	}
+	return 0
 }
 
 func main() {}

@@ -23,6 +23,11 @@ extern "C" {
     fn wpp_bridge_disconnect();
     fn wpp_bridge_free_string(s: *mut c_char);
     fn wpp_bridge_fetch_contacts() -> *mut c_char;
+    fn wpp_bridge_send_text(id: *const c_char, jid: *const c_char, body: *const c_char) -> c_int;
+    fn wpp_bridge_poll_message() -> *mut c_char;
+    fn wpp_bridge_poll_presence() -> *mut c_char;
+    fn wpp_bridge_poll_receipt() -> *mut c_char;
+    fn wpp_bridge_subscribe_presence(jid: *const c_char) -> c_int;
 }
 
 /// Copy a Go-owned C string into an owned `String` and free the Go allocation.
@@ -113,6 +118,57 @@ pub fn disconnect() {
 pub fn fetch_contacts() -> Option<String> {
     // SAFETY: the returned pointer is null or a Go-allocated C string we own.
     unsafe { take_string(wpp_bridge_fetch_contacts()) }
+}
+
+/// Send `body` as a text message to `jid`, stamped with local message `id` so
+/// receipts can be matched back. `Err(code)` carries the Go status code; pair
+/// with [`last_error`] for a message.
+pub fn send_text(id: &str, jid: &str, body: &str) -> Result<(), i32> {
+    let c_id = CString::new(id).map_err(|_| -100)?;
+    let c_jid = CString::new(jid).map_err(|_| -100)?;
+    let c_body = CString::new(body).map_err(|_| -100)?;
+    // SAFETY: all strings are valid NUL-terminated and outlive the call.
+    let code = unsafe { wpp_bridge_send_text(c_id.as_ptr(), c_jid.as_ptr(), c_body.as_ptr()) };
+    if code == 0 {
+        Ok(())
+    } else {
+        Err(code)
+    }
+}
+
+/// Poll for the next queued incoming message line (`jid\tflag\tbody`), if any.
+/// `None` when the queue is empty.
+pub fn poll_message() -> Option<String> {
+    // SAFETY: the returned pointer is null or a Go-allocated C string we own.
+    unsafe { take_string(wpp_bridge_poll_message()) }
+}
+
+/// Poll for the next queued presence line (`jid\tstate\textra`), if any.
+/// `None` when the queue is empty.
+pub fn poll_presence() -> Option<String> {
+    // SAFETY: the returned pointer is null or a Go-allocated C string we own.
+    unsafe { take_string(wpp_bridge_poll_presence()) }
+}
+
+/// Poll for the next queued receipt line (`chat\tstate\tid1,id2`), if any.
+/// `None` when the queue is empty.
+pub fn poll_receipt() -> Option<String> {
+    // SAFETY: the returned pointer is null or a Go-allocated C string we own.
+    unsafe { take_string(wpp_bridge_poll_receipt()) }
+}
+
+/// Subscribe to presence updates for `jid`. `Err(code)` carries the Go status
+/// code; pair with [`last_error`] for a message.
+#[allow(dead_code)]
+pub fn subscribe_presence(jid: &str) -> Result<(), i32> {
+    let c_jid = CString::new(jid).map_err(|_| -100)?;
+    // SAFETY: `c_jid` is a valid NUL-terminated string that outlives the call.
+    let code = unsafe { wpp_bridge_subscribe_presence(c_jid.as_ptr()) };
+    if code == 0 {
+        Ok(())
+    } else {
+        Err(code)
+    }
 }
 
 #[cfg(test)]

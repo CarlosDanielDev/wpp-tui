@@ -2,7 +2,11 @@ mod app;
 mod backend;
 #[cfg(feature = "whatsmeow")]
 mod bridge;
+mod fuzzy;
+mod notify;
 mod qr;
+mod store;
+mod theme;
 mod tui;
 mod ui;
 mod widgets;
@@ -15,7 +19,7 @@ use crossterm::event::{self, Event, KeyEventKind};
 use tokio::sync::mpsc;
 
 use app::{Action, App};
-use backend::{Backend, BackendEvent, MockBackend};
+use backend::{Backend, BackendEvent, Message, MockBackend};
 use tui::Term;
 
 /// Things the event loop reacts to: backend pushes and user keystrokes,
@@ -48,7 +52,10 @@ async fn main() -> Result<()> {
     // Contacts are fetched lazily once the backend reports `Connected` (see the
     // event loop) — the real bridge has no contacts until the device is paired,
     // so fetching here would fail before the QR is ever shown.
-    let mut app = App::default();
+    let mut app = App {
+        theme: theme::Theme::from_env(),
+        ..App::default()
+    };
 
     let mut terminal = tui::init()?;
     let result = run(&mut terminal, &mut app, backend).await;
@@ -81,6 +88,18 @@ async fn refresh_contacts(backend: &Arc<dyn Backend>, app: &mut App) {
 
 async fn run(terminal: &mut Term, app: &mut App, backend: Arc<dyn Backend>) -> Result<()> {
     let (tx, mut rx) = mpsc::channel::<Tick>(64);
+
+    let data_dir = std::env::var("WPP_DATA_DIR").unwrap_or_else(|_| "wpp-data".to_string());
+    let store = store::FileStore::new(&data_dir);
+
+    // Seed the sidebar from persisted chats so conversations survive a restart.
+    // Reverse so the index order is preserved with most-recent first after
+    // fronting each JID.
+    if let Ok(chats) = store.list_chats() {
+        for jid in chats.into_iter().rev() {
+            app.front_chat_pub(&jid);
+        }
+    }
 
     // Producer: drain backend events forever.
     let event_backend = Arc::clone(&backend);
@@ -131,6 +150,12 @@ async fn run(terminal: &mut Term, app: &mut App, backend: Arc<dyn Backend>) -> R
     while let Some(tick) = rx.recv().await {
         match tick {
             Tick::Backend(ev) => {
+                if let BackendEvent::Message { chat, msg } = &ev {
+                    let _ = store.append(chat, msg);
+                }
+                if let Some(text) = notify::notify_text(app, &ev) {
+                    notify::fire(&text);
+                }
                 let was_connected = app.connected;
                 app.apply_event(ev);
                 // On the first successful pairing, pull the contact list. The
@@ -145,8 +170,14 @@ async fn run(terminal: &mut Term, app: &mut App, backend: Arc<dyn Backend>) -> R
                 Action::Quit => {
                     app.should_quit = true;
                 }
-                Action::Send { chat, body } => {
-                    backend.send(&chat, &body).await?;
+                Action::Send { id, chat, body } => {
+                    let _ = store.append(&chat, &Message::outgoing(id.clone(), body.clone()));
+                    backend.send(&id, &chat, &body).await?;
+                }
+                Action::OpenChat { chat } => {
+                    if let Ok(history) = store.load(&chat) {
+                        app.load_history(chat, history);
+                    }
                 }
                 Action::Refresh => refresh_contacts(&backend, app).await,
             },
